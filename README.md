@@ -38,6 +38,9 @@ pnpm dev
 | `MCP_TRANSPORT` | `http` | `http` (Streamable HTTP) or `stdio` (local dev / desktop MCP clients). |
 | `PORT` | `3100` | HTTP listen port (http transport only). |
 | `CIVITAI_USER_ID` | — | Optional: skip the `user.getToken` JWT round-trip for self-id resolution. |
+| `CIVITAI_UPLOAD_MAX_BYTES` | `10485760` | Max bytes accepted for an image fetched/decoded by `upload_image` (10 MB). Guards against memory-exhaustion. |
+| `CIVITAI_UPLOAD_ALLOWED_HOSTS` | — | CSV allowlist of hostnames permitted for URL-based image uploads. When set, only these hosts (and subdomains) may be fetched. Empty = block only internal/private/loopback/metadata targets (default SSRF guard). |
+| `MCP_ALLOWED_HOSTS` | — | CSV of `Host` values allowed by DNS-rebinding protection. When set, protection is enabled and only these hosts may reach `/mcp`. Leave empty in-cluster (behind ingress); set for localhost dev, e.g. `localhost:3100,127.0.0.1:3100`. |
 
 ### Per-request auth (multi-tenant)
 

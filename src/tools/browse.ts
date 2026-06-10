@@ -39,18 +39,21 @@ export const browseTools: ToolModule = (reg) => {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async (args, { rest, config }) => {
-      if (args.type) args.type = await rest.validateEnum('type', args.type, 'ModelType');
-      if (args.sort) args.sort = await rest.validateEnum('sort', args.sort, 'ModelSort');
-      if (args.period) args.period = await rest.validateEnum('period', args.period, 'MetricTimeframe');
+      // Validate into locals rather than mutating the SDK-parsed input object.
+      const type = args.type ? await rest.validateEnum('type', args.type, 'ModelType') : undefined;
+      const sort = args.sort ? await rest.validateEnum('sort', args.sort, 'ModelSort') : undefined;
+      const period = args.period
+        ? await rest.validateEnum('period', args.period, 'MetricTimeframe')
+        : undefined;
 
       // Meilisearch bug: when query + (type|supportsGeneration) are combined the
       // server ignores the secondary filter. Over-fetch and filter client-side.
-      const needsClientFilter = !!args.query && (!!args.type || !!args.supportsGeneration);
+      const needsClientFilter = !!args.query && (!!type || !!args.supportsGeneration);
 
       const params: Record<string, string | number | boolean | undefined> = {
         limit: needsClientFilter ? 100 : args.limit,
-        sort: args.sort ?? 'Highest Rated',
-        period: args.period ?? 'AllTime',
+        sort: sort ?? 'Highest Rated',
+        period: period ?? 'AllTime',
         query: args.query,
         baseModels: args.baseModel,
         tag: args.tag,
@@ -59,7 +62,7 @@ export const browseTools: ToolModule = (reg) => {
       };
       // When NOT client-filtering, push type/generation to the API directly.
       if (!args.query) {
-        if (args.type) params.types = args.type;
+        if (type) params.types = type;
         if (args.supportsGeneration) params.supportsGeneration = true;
       }
 
@@ -69,7 +72,7 @@ export const browseTools: ToolModule = (reg) => {
       );
       let items = data.items ?? [];
       if (needsClientFilter) {
-        if (args.type) items = items.filter((m) => m.type?.toLowerCase() === args.type!.toLowerCase());
+        if (type) items = items.filter((m) => m.type?.toLowerCase() === type.toLowerCase());
         // supportsGeneration isn't on the public shape reliably; type filter is the main fix.
         items = items.slice(0, args.limit);
       }
@@ -169,12 +172,14 @@ export const browseTools: ToolModule = (reg) => {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async (args, { rest }) => {
-      if (args.sort) args.sort = await rest.validateEnum('sort', args.sort, 'ImageSort');
-      if (args.period) args.period = await rest.validateEnum('period', args.period, 'MetricTimeframe');
+      const sort = args.sort ? await rest.validateEnum('sort', args.sort, 'ImageSort') : undefined;
+      const period = args.period
+        ? await rest.validateEnum('period', args.period, 'MetricTimeframe')
+        : undefined;
       const data = await rest.get<{ items?: ImageLite[]; metadata?: { nextCursor?: string } }>('/images', {
         limit: args.limit,
-        sort: args.sort ?? 'Most Reactions',
-        period: args.period ?? 'AllTime',
+        sort: sort ?? 'Most Reactions',
+        period: period ?? 'AllTime',
         withMeta: true,
         query: args.query,
         modelId: args.modelId,

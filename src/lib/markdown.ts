@@ -10,6 +10,31 @@
  * The server runs its own sanitizer; these just need to emit reasonable HTML.
  */
 
+/**
+ * Allow only http(s) and mailto link schemes. javascript:, data:, vbscript:,
+ * file: etc are dropped (the link renders as plain text). Protocol-relative
+ * (//host) and relative/anchor URLs are allowed through. Defense-in-depth: the
+ * server sanitizes too, but we must not emit a clickable javascript: href.
+ */
+function isSafeHref(url: string): boolean {
+  // Browsers ignore ASCII whitespace/control chars inside a scheme, so strip
+  // them (codepoints <= 0x20) before testing.
+  const cleaned = url.replace(/[\x00-\x20]/g, '');
+  // Reject control chars/whitespace embedded in the scheme (e.g. "java\tscript:").
+  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(cleaned);
+  if (!schemeMatch) return true; // no scheme → relative/anchor/protocol-relative, allow
+  const scheme = schemeMatch[1]!.toLowerCase();
+  return scheme === 'http' || scheme === 'https' || scheme === 'mailto';
+}
+
+/** Escape characters unsafe inside a double-quoted HTML attribute value. */
+function escapeAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/"/g, '&quot;');
+}
+
 /** Inline replacements shared by both converters (article-flavored: includes code). */
 function inlineArticle(text: string): string {
   let s = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -18,8 +43,9 @@ function inlineArticle(text: string): string {
   s = s.replace(
     /\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
     (_m, txt: string, url: string, title?: string) => {
-      const t = title ? ` title="${title}"` : '';
-      return `<a href="${url}" rel="ugc" target="_blank"${t}>${txt}</a>`;
+      if (!isSafeHref(url)) return txt; // drop unsafe scheme, keep the text
+      const t = title ? ` title="${escapeAttr(title)}"` : '';
+      return `<a href="${escapeAttr(url)}" rel="ugc" target="_blank"${t}>${txt}</a>`;
     }
   );
 

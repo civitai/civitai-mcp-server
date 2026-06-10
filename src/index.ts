@@ -1,4 +1,4 @@
-import express, { type Request, type Response } from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { getConfig } from './config.js';
@@ -18,6 +18,18 @@ async function startStdio(): Promise<void> {
   await server.connect(transport);
   // stdout is the protocol channel in stdio mode; log to stderr only.
   process.stderr.write(`${SERVER_NAME} v${SERVER_VERSION} (stdio) ready — ${toolCount} tools\n`);
+
+  // Graceful shutdown: close the transport cleanly so the parent (MCP client)
+  // sees a clean EOF rather than a severed pipe.
+  let shuttingDown = false;
+  const shutdown = (signal: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    process.stderr.write(`${SERVER_NAME}: ${signal} received, closing stdio transport\n`);
+    void transport.close().finally(() => process.exit(0));
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 function baseUrlFromRequest(req: Request): string {
@@ -72,11 +84,33 @@ async function startHttp(): Promise<void> {
   // MCP Streamable HTTP endpoint. Stateless: a fresh server + transport per
   // request so the deployment scales horizontally and each request carries its
   // own Authorization header for upstream auth.
+  // DNS-rebinding protection: when MCP_ALLOWED_HOSTS is configured, the transport
+  // validates the incoming Host header against the allowlist (defends against a
+  // malicious page resolving an attacker domain to this in-cluster IP). Left OFF
+  // by default — the server normally sits behind an in-cluster ingress, and
+  // leaving it on without the right Host entries would reject every request.
+  // When enabled we always fold in localhost:PORT + 127.0.0.1:PORT so the README
+  // .mcp.json localhost/inspector flow keeps working.
+  const dnsRebindingProtection =
+    config.mcpAllowedHosts && config.mcpAllowedHosts.length > 0
+      ? {
+          enableDnsRebindingProtection: true,
+          allowedHosts: Array.from(
+            new Set([
+              ...config.mcpAllowedHosts,
+              `localhost:${config.port}`,
+              `127.0.0.1:${config.port}`,
+            ])
+          ),
+        }
+      : {};
+
   app.post('/mcp', async (req: Request, res: Response) => {
     const { server } = createServer(config);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
+      ...dnsRebindingProtection,
     });
     res.on('close', () => {
       void transport.close();
@@ -107,11 +141,57 @@ async function startHttp(): Promise<void> {
   app.get('/mcp', methodNotAllowed);
   app.delete('/mcp', methodNotAllowed);
 
-  app.listen(config.port, () => {
+  // Body-parser errors (malformed JSON) must surface as a JSON-RPC parse error,
+  // not express's default HTML error page. Express identifies the JSON middleware
+  // as the source via `err.type === 'entity.parse.failed'` (a SyntaxError).
+  app.use((err: unknown, _req: Request, res: Response, next: NextFunction): void => {
+    const isParseError =
+      err instanceof SyntaxError &&
+      (err as SyntaxError & { type?: string; status?: number }).type === 'entity.parse.failed';
+    if (isParseError) {
+      res.status(400).json({
+        jsonrpc: '2.0',
+        error: { code: -32700, message: `Parse error: ${err.message}` },
+        id: null,
+      });
+      return;
+    }
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    res.status(500).json({
+      jsonrpc: '2.0',
+      error: { code: -32603, message: err instanceof Error ? err.message : 'Internal error' },
+      id: null,
+    });
+  });
+
+  const httpServer = app.listen(config.port, () => {
     process.stdout.write(
       `${SERVER_NAME} v${SERVER_VERSION} (http) listening on :${config.port} — ${toolCount} tools — upstream ${config.apiUrl}\n`
     );
   });
+
+  // Graceful shutdown: stop accepting new connections, drain in-flight requests
+  // (up to ~10s), then force-exit so a hung connection can't block the pod.
+  let shuttingDown = false;
+  const shutdown = (signal: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    process.stdout.write(`${SERVER_NAME}: ${signal} received, draining HTTP server\n`);
+    const forceExit = setTimeout(() => {
+      process.stderr.write(`${SERVER_NAME}: drain timed out, forcing exit\n`);
+      process.exit(1);
+    }, 10_000);
+    forceExit.unref();
+    httpServer.close(() => {
+      clearTimeout(forceExit);
+      process.exit(0);
+    });
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 async function main(): Promise<void> {

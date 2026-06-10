@@ -9,7 +9,7 @@ RUN corepack enable
 
 # Install deps (with dev deps) using the lockfile for reproducibility.
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile || pnpm install
+RUN pnpm install --frozen-lockfile
 
 # Build TypeScript -> dist.
 COPY tsconfig.json ./

@@ -1,6 +1,45 @@
 import { z } from 'zod';
 import type { ToolModule } from '../server.js';
 import { ok, type Services } from './helpers.js';
+import { safeFetchUrl } from '../lib/safe-fetch.js';
+
+/** Fallback hard cap on image payloads when config does not override it — 10 MiB. */
+export const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Read a fetch Response body into a Buffer, aborting if it exceeds maxBytes.
+ * Checks Content-Length first (cheap reject) but also counts streamed bytes
+ * because Content-Length can lie or be absent.
+ */
+export async function readBodyCapped(res: Response, maxBytes: number): Promise<Buffer> {
+  const declared = res.headers.get('content-length');
+  if (declared && Number(declared) > maxBytes) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new Error(`Image too large: Content-Length ${declared} exceeds ${maxBytes} bytes limit`);
+  }
+
+  if (!res.body) return Buffer.alloc(0);
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          throw new Error(`Image too large: stream exceeded ${maxBytes} bytes limit`);
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  return Buffer.concat(chunks);
+}
 
 export interface UploadedImage {
   uuid: string;
@@ -64,17 +103,32 @@ export async function uploadImage(
   source: { url?: string; data?: string; contentType?: string }
 ): Promise<UploadedImage> {
   services.auth.requireKey();
+  const maxBytes = services.config.uploadMaxBytes ?? DEFAULT_MAX_IMAGE_BYTES;
+  const allowedHosts = services.config.uploadAllowedHosts;
   let bytes: Buffer;
   let contentType = source.contentType;
 
   if (source.url) {
-    const res = await fetch(source.url);
+    // User-supplied URL: route through the SSRF-hardened fetcher (the in-cluster
+    // server must not fetch internal/metadata endpoints) and cap the download.
+    const res = await safeFetchUrl(source.url, {}, allowedHosts);
     if (!res.ok) throw new Error(`Failed to fetch image from URL: ${res.status} ${res.statusText}`);
     contentType = contentType ?? res.headers.get('content-type') ?? undefined;
-    bytes = Buffer.from(await res.arrayBuffer());
+    bytes = await readBodyCapped(res, maxBytes);
   } else if (source.data) {
     const cleaned = source.data.replace(/^data:[^;]+;base64,/, '');
+    // Reject oversized base64 before allocating the Buffer. Base64 expands ~4/3,
+    // so estimate decoded size from the cleaned string length first.
+    const estimatedBytes = Math.floor((cleaned.length * 3) / 4);
+    if (estimatedBytes > maxBytes) {
+      throw new Error(
+        `Image too large: base64 decodes to ~${estimatedBytes} bytes, exceeds ${maxBytes} bytes limit`
+      );
+    }
     bytes = Buffer.from(cleaned, 'base64');
+    if (bytes.length > maxBytes) {
+      throw new Error(`Image too large: decoded ${bytes.length} bytes exceeds ${maxBytes} bytes limit`);
+    }
   } else {
     throw new Error('uploadImage requires either url or data (base64)');
   }

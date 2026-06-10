@@ -9,6 +9,18 @@ import { z } from 'zod';
  */
 const TransportEnum = z.enum(['http', 'stdio']);
 
+/** Parse a comma-separated env list into a trimmed, lowercased, deduped array. */
+function csvList(raw: string | undefined): string[] | undefined {
+  if (raw == null) return undefined;
+  const items = raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 0);
+  return items.length > 0 ? Array.from(new Set(items)) : undefined;
+}
+
+const DEFAULT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+
 const ConfigSchema = z.object({
   apiUrl: z
     .string()
@@ -19,6 +31,12 @@ const ConfigSchema = z.object({
   transport: TransportEnum.default('http'),
   port: z.coerce.number().int().positive().default(3100),
   userId: z.coerce.number().int().positive().optional(),
+  /** Max bytes for any server-side user-URL fetch / base64 decode (image upload). */
+  uploadMaxBytes: z.coerce.number().int().positive().default(DEFAULT_UPLOAD_MAX_BYTES),
+  /** Optional allowlist of hostnames the server may fetch user URLs from. */
+  uploadAllowedHosts: z.array(z.string()).optional(),
+  /** Optional allowlist of Host headers for MCP DNS-rebinding protection. */
+  mcpAllowedHosts: z.array(z.string()).optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -34,6 +52,9 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     transport: env.MCP_TRANSPORT,
     port: env.PORT,
     userId: env.CIVITAI_USER_ID,
+    uploadMaxBytes: env.CIVITAI_UPLOAD_MAX_BYTES,
+    uploadAllowedHosts: csvList(env.CIVITAI_UPLOAD_ALLOWED_HOSTS),
+    mcpAllowedHosts: csvList(env.MCP_ALLOWED_HOSTS),
   });
 }
 

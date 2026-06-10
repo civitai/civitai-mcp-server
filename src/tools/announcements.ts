@@ -8,7 +8,6 @@ interface AnnouncementRow {
   title: string;
   content: string;
   color?: string;
-  emoji?: string;
   domain?: string[];
   startsAt?: string;
   endsAt?: string;
@@ -59,7 +58,6 @@ export const announcementTools: ToolModule = (reg) => {
         title: z.string().optional().describe('Title (required on create)'),
         content: z.string().optional().describe('Body Markdown (rendered by the server; required on create)'),
         color: z.string().optional().describe('Color token: yellow, red, blue, violet, gray, gold, green, pink...'),
-        emoji: z.string().optional().describe('Optional leading emoji'),
         domains: z.array(z.enum(['all', 'red', 'green', 'blue'])).optional().describe('Domain scope (default ["all"])'),
         startsAt: z.string().optional().describe('Start time (ISO or YYYY-MM-DD); defaults to now on create'),
         endsAt: z.string().optional().describe('End time (ISO or YYYY-MM-DD)'),
@@ -119,7 +117,6 @@ export const announcementTools: ToolModule = (reg) => {
         domain: args.domains?.length ? args.domains : existing?.domain ?? ['all'],
         metadata,
       };
-      if (args.emoji) payload.emoji = args.emoji;
       if (args.startsAt) payload.startsAt = toIso(args.startsAt);
       else if (existing?.startsAt) payload.startsAt = existing.startsAt;
       else if (!isUpdate) payload.startsAt = new Date().toISOString();

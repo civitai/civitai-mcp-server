@@ -58,19 +58,69 @@ function formatComment(c: CommentRow, indent: string, cap = 280): string {
   return `${indent}#${c.id} by ${author}${pinned}${hidden} at ${when} ${reactionSummary(c)}\n${indent}  ${body}`.trimEnd();
 }
 
-async function fetchComments(
+/** Max pages to walk per entity before giving up (mirrors skill comment.mjs). */
+const MAX_PAGES = 50;
+
+/** Hard global ceiling on total comments fetched per list_comments call. */
+const MAX_COMMENTS_PER_CALL = 500;
+
+/**
+ * Fetch ALL comments for an entity by threading commentv2.getInfinite's NUMERIC
+ * nextCursor across pages. Without this the list caps at one page (default 20),
+ * silently truncating threads and understating reply counts.
+ *
+ * `budget` is a shared per-call ceiling: when total fetched comments across the
+ * whole list_comments call reach it, we stop early (and report truncation) so a
+ * deep thread can't fan out to the 100^depth worst case.
+ */
+async function fetchAllComments(
   services: Services,
   entityType: string,
   entityId: number,
   limit: number,
-  sort: string
-): Promise<{ comments: CommentRow[]; nextCursor?: string }> {
-  const res = await services.trpc.call<{ comments?: CommentRow[]; nextCursor?: string }>(
-    'commentv2.getInfinite',
-    { entityType, entityId, limit, sort },
-    'GET'
-  );
-  return { comments: res.comments ?? [], nextCursor: res.nextCursor };
+  sort: string,
+  budget: { remaining: number; truncated: boolean }
+): Promise<{ comments: CommentRow[]; nextCursor?: number }> {
+  const all: CommentRow[] = [];
+  let cursor: number | undefined;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    if (budget.remaining <= 0) {
+      budget.truncated = true;
+      break;
+    }
+    const input: Record<string, unknown> = { entityType, entityId, limit, sort };
+    // tRPC/zod expects a numeric cursor here; passing a string fails validation.
+    if (cursor !== undefined) input.cursor = cursor;
+    const res = await services.trpc.call<{ comments?: CommentRow[]; nextCursor?: number | string }>(
+      'commentv2.getInfinite',
+      input,
+      'GET'
+    );
+    const batch = res.comments ?? [];
+    for (const c of batch) {
+      if (budget.remaining <= 0) {
+        budget.truncated = true;
+        break;
+      }
+      all.push(c);
+      budget.remaining--;
+    }
+    const next = res.nextCursor;
+    if (next === undefined || next === null || budget.remaining <= 0) {
+      return { comments: all, nextCursor: toNumericCursor(next) };
+    }
+    cursor = toNumericCursor(next);
+    if (cursor === undefined) return { comments: all };
+  }
+  budget.truncated = true;
+  return { comments: all };
+}
+
+/** Coerce a cursor (the API returns a number, but be defensive) to a number. */
+function toNumericCursor(v: number | string | null | undefined): number | undefined {
+  if (v === undefined || v === null) return undefined;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 export const commentTools: ToolModule = (reg) => {
@@ -79,12 +129,12 @@ export const commentTools: ToolModule = (reg) => {
     {
       title: 'List comments',
       description:
-        'List comments on an entity (article, image, post, model, etc). Recurses into replies up to `depth` levels (replies are comments whose parent entity is comment:<parentId>). Bodies truncated to 280 chars unless includeFull. Shows aggregated reactions, pin/hidden flags.',
+        'List comments on an entity (article, image, post, model, etc). Follows pagination so whole threads are returned (not just the first page). Recurses into replies up to `depth` levels (replies are comments whose parent entity is comment:<parentId>). To bound the worst-case fan-out, a single call fetches at most 500 comments total; when that ceiling is hit the result is marked truncated. Bodies truncated to 280 chars unless includeFull. Shows aggregated reactions, pin/hidden flags.',
       inputSchema: {
         entityType: z.enum(ENTITY_TYPES).describe('Entity type the comments belong to'),
         entityId: z.number().int().describe('Entity ID'),
         depth: z.number().int().min(0).max(3).default(1).describe('Reply nesting depth (0 = top-level only)'),
-        limit: z.number().int().min(1).max(100).default(20).describe('Page size'),
+        limit: z.number().int().min(1).max(100).default(20).describe('Page size per upstream request'),
         sort: z.enum(['Oldest', 'Newest']).default('Oldest').describe('Sort order'),
         includeFull: z.boolean().default(false).describe('Show full bodies instead of truncating'),
       },
@@ -93,12 +143,15 @@ export const commentTools: ToolModule = (reg) => {
     async (args, services) => {
       const cap = args.includeFull ? 0 : 280;
       const lines: string[] = [];
+      // Global ceiling shared across the whole recursive walk. Prevents the
+      // 100^depth fan-out worst case from exhausting memory / the upstream API.
+      const budget = { remaining: MAX_COMMENTS_PER_CALL, truncated: false };
       const collect = async (et: string, eid: number, d: number, indent: string): Promise<number> => {
-        const { comments } = await fetchComments(services, et, eid, args.limit, args.sort);
+        const { comments } = await fetchAllComments(services, et, eid, args.limit, args.sort, budget);
         for (const c of comments) {
           lines.push(formatComment(c, indent, cap));
-          if (d < args.depth) {
-            const children = await fetchComments(services, 'comment', c.id, args.limit, args.sort);
+          if (d < args.depth && budget.remaining > 0) {
+            const children = await fetchAllComments(services, 'comment', c.id, args.limit, args.sort, budget);
             if (children.comments.length) {
               lines.push(`${indent}  ↳ ${children.comments.length} repl${children.comments.length === 1 ? 'y' : 'ies'}:`);
               await collect('comment', c.id, d + 1, indent + '    ');
@@ -108,12 +161,18 @@ export const commentTools: ToolModule = (reg) => {
         return comments.length;
       };
       const top = await collect(args.entityType, args.entityId, 0, '');
+      const truncationNote = budget.truncated
+        ? `\n\n[results truncated at ${MAX_COMMENTS_PER_CALL} comments — narrow entityId or reduce depth to see more]`
+        : '';
       const footer = args.includeFull
         ? ''
         : '\n\nBodies truncated to 280 chars. Use includeFull or get_comment for full text.';
       return ok(
-        (lines.join('\n\n') || 'No comments.') + `\n\n(${top} top-level, depth=${args.depth})` + footer,
-        { topLevelCount: top }
+        (lines.join('\n\n') || 'No comments.') +
+          `\n\n(${top} top-level, depth=${args.depth})` +
+          truncationNote +
+          footer,
+        { topLevelCount: top, truncated: budget.truncated, maxComments: MAX_COMMENTS_PER_CALL }
       );
     }
   );
