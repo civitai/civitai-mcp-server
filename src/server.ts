@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { Config } from './config.js';
 import { bearerFromHeader } from './client/auth.js';
 import { buildServices, fail, type Services, type ToolResult } from './tools/helpers.js';
+import type { ToolCatalogEntry } from './lib/landing.js';
 
 import { browseTools } from './tools/browse.js';
 import { articleTools } from './tools/articles.js';
@@ -39,6 +40,8 @@ export type ToolModule = (reg: Registrar) => void;
 export interface BuiltServer {
   server: McpServer;
   toolCount: number;
+  /** Single source of truth for the landing page + llms.txt tool catalog. */
+  catalog: ToolCatalogEntry[];
 }
 
 /**
@@ -49,9 +52,20 @@ export interface BuiltServer {
 export function createServer(config: Config): BuiltServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
   let toolCount = 0;
+  const catalog: ToolCatalogEntry[] = [];
+  // Set by the module loop below so each registration records its category.
+  let currentCategory = 'Other';
 
   const reg: Registrar = (name, toolConfig, handlerFn) => {
     toolCount++;
+    catalog.push({
+      name,
+      title: toolConfig.title,
+      description: toolConfig.description,
+      category: currentCategory,
+      readOnly: toolConfig.annotations?.readOnlyHint === true,
+      destructive: toolConfig.annotations?.destructiveHint === true,
+    });
     server.registerTool(
       name,
       {
@@ -76,18 +90,20 @@ export function createServer(config: Config): BuiltServer {
     );
   };
 
-  for (const mod of [
-    browseTools,
-    articleTools,
-    commentTools,
-    messagingTools,
-    announcementTools,
-    changelogTools,
-    imageTools,
-    whoamiTools,
-  ]) {
+  const modules: Array<{ category: string; mod: ToolModule }> = [
+    { category: 'Browse (no auth required)', mod: browseTools },
+    { category: 'Articles', mod: articleTools },
+    { category: 'Comments', mod: commentTools },
+    { category: 'Messaging', mod: messagingTools },
+    { category: 'Announcements (moderator)', mod: announcementTools },
+    { category: 'Changelog (moderator)', mod: changelogTools },
+    { category: 'Images', mod: imageTools },
+    { category: 'Utility', mod: whoamiTools },
+  ];
+  for (const { category, mod } of modules) {
+    currentCategory = category;
     mod(reg);
   }
 
-  return { server, toolCount };
+  return { server, toolCount, catalog };
 }

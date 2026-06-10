@@ -55,6 +55,21 @@ per-deployment key. In stdio mode only the env key is used.
 - **stdio**: set `MCP_TRANSPORT=stdio`. stdout is reserved for the protocol; logs
   go to stderr.
 
+### HTTP endpoints
+
+| Method & path | Purpose |
+|---|---|
+| `POST /mcp` | MCP Streamable HTTP endpoint (JSON-RPC). |
+| `GET /healthz` | Plain 200 liveness/readiness probe (no upstream calls). |
+| `GET /` | Dual-audience index. Content-negotiates on `User-Agent`: a browser (UA contains `Mozilla/`) gets a self-contained HTML landing page; everything else (curl, fetch, agents, missing UA) gets the `llms.txt` content as `text/plain`. |
+| `GET /llms.txt` | The [llms.txt](https://llmstxt.org)-style agent self-setup guide as `text/plain` — what the server is, the MCP endpoint URL, transport, auth, connect snippets, and the full tool catalog. Share this URL with your agent and it can configure itself. |
+
+The MCP endpoint URL advertised by `/` and `/llms.txt` is derived from the
+request `Host` header, honoring `X-Forwarded-Proto` / `X-Forwarded-Host` so it is
+correct behind a k8s ingress. The tool catalog rendered into both the landing
+page and `llms.txt` is generated from the actual registered tools (single source
+of truth — no hand-duplicated lists).
+
 ## Tool catalog (26 tools)
 
 ### Browse (no auth required)
