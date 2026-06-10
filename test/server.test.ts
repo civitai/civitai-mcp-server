@@ -4,13 +4,13 @@ import { parseConfig } from '../src/config.js';
 import { probeImageSize } from '../src/tools/images.js';
 
 describe('createServer', () => {
-  // The plan's catalog lists 22 numbered slots, but slot 14 ("edit/delete/react/
-  // pin/lock — merge into focused tools") expands to 5 distinct MCP tools. So the
-  // catalog maps to 26 registered tools: browse 7, articles 4, comments 8,
-  // messaging 1, images 1, announcements 3, changelog 1, whoami 1.
-  it('registers the full tool catalog (26 tools)', () => {
+  // Phase 1 catalog = 26 tools: browse 7, articles 4, comments 8, messaging 1,
+  // images 1, announcements 3, changelog 1, whoami 1.
+  // Phase 2 (P0 community participation) adds 26: posts 4, engagement 8,
+  // collections 3, notifications 3, chat 4, bounties 4. => 52 total.
+  it('registers the full tool catalog (52 tools)', () => {
     const { toolCount } = createServer(parseConfig({}));
-    expect(toolCount).toBe(26);
+    expect(toolCount).toBe(52);
   });
 });
 

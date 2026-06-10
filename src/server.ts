@@ -16,6 +16,12 @@ import { announcementTools } from './tools/announcements.js';
 import { changelogTools } from './tools/changelog.js';
 import { imageTools } from './tools/images.js';
 import { whoamiTools } from './tools/whoami.js';
+import { postTools } from './tools/posts.js';
+import { engagementTools } from './tools/engagement.js';
+import { collectionTools } from './tools/collections.js';
+import { notificationTools } from './tools/notifications.js';
+import { chatTools } from './tools/chat.js';
+import { bountyTools } from './tools/bounties.js';
 
 export const SERVER_NAME = 'civitai-mcp-server';
 export const SERVER_VERSION = '0.1.0';
@@ -92,9 +98,15 @@ export function createServer(config: Config): BuiltServer {
 
   const modules: Array<{ category: string; mod: ToolModule }> = [
     { category: 'Browse (no auth required)', mod: browseTools },
+    { category: 'Posts', mod: postTools },
+    { category: 'Engagement', mod: engagementTools },
     { category: 'Articles', mod: articleTools },
     { category: 'Comments', mod: commentTools },
+    { category: 'Collections', mod: collectionTools },
+    { category: 'Notifications', mod: notificationTools },
     { category: 'Messaging', mod: messagingTools },
+    { category: 'Chat', mod: chatTools },
+    { category: 'Bounties', mod: bountyTools },
     { category: 'Announcements (moderator)', mod: announcementTools },
     { category: 'Changelog (moderator)', mod: changelogTools },
     { category: 'Images', mod: imageTools },

@@ -73,7 +73,7 @@ correct behind a k8s ingress. The tool catalog rendered into both the landing
 page and `llms.txt` is generated from the actual registered tools (single source
 of truth — no hand-duplicated lists).
 
-## Tool catalog (26 tools)
+## Tool catalog (52 tools)
 
 ### Browse (no auth required)
 | Tool | Description |
@@ -85,6 +85,26 @@ of truth — no hand-duplicated lists).
 | `get_image` | Batch image details: prompt, negative, sampler, steps, CFG, seed, resources. |
 | `search_creators` | Search creators/users. |
 | `list_enums` | List filter enum values (model types, sorts, base models, timeframes). |
+
+### Posts (auth — onboarded, non-muted)
+| Tool | Description |
+|---|---|
+| `create_post` | Flagship sharing flow: `post.create` → ordered `post.addImage` (UUID, auto-uploads URLs) → optional publish via `post.update { publishedAt: ['Date'] }`. Deletes the orphan draft if attaching/publishing fails. |
+| `get_post` | Fetch a post by ID. |
+| `publish_post` | Publish a draft via `post.update { publishedAt }` (Date hint). |
+| `delete_post` | Delete a post you own. |
+
+### Engagement (auth)
+| Tool | Description |
+|---|---|
+| `react` | Toggle Like/Dislike/Laugh/Cry/Heart on image/post/article/comment/resourceReview/etc. `reaction.toggle` is fire-and-forget (200 ≠ confirmed). Guarded. |
+| `upsert_resource_review` | Star rating (1-5) + recommend + Markdown details. `resourceReview.upsert`. Guarded. |
+| `get_my_resource_review` | Read your existing review for a model version. |
+| `toggle_follow_user` | Follow/unfollow (resolves username→id). `user.toggleFollow`. Verified. |
+| `toggle_favorite_model` | Favorite/bookmark a model (explicit `setTo`). `user.toggleFavorite`. |
+| `notify_model` | Toggle new-version notifications. `user.toggleNotifyModel`. |
+| `toggle_bookmark_article` | Bookmark/un-bookmark an article. `user.toggleBookmarkedArticle`. Verified. |
+| `complete_onboarding_step` | Complete TOS/RedTOS/Profile/BrowsingLevels/Buzz. Prerequisite for any verified/guarded write. |
 
 ### Articles (auth)
 | Tool | Description |
@@ -103,10 +123,40 @@ of truth — no hand-duplicated lists).
 | `edit_comment` / `delete_comment` / `react_to_comment` | Edit, delete, toggle reaction. |
 | `pin_comment` / `lock_thread` | Moderator-gated upstream. |
 
+### Collections (auth — flag-gated `collections`)
+| Tool | Description |
+|---|---|
+| `upsert_collection` | Create/update a collection. `collection.upsert`. Guarded. |
+| `add_to_collection` | Save one item (article/image/post/model) into one or more collections. `collection.saveItem` (exactly one id field + `collections[]`). |
+| `follow_collection` | Follow/unfollow a collection. |
+
+### Notifications (auth)
+| Tool | Description |
+|---|---|
+| `list_notifications` | List notifications (unread/category filters). `cursor: ['Date']` hint applied; returns `nextCursor`. |
+| `mark_notifications_read` | Mark one (`id` as string, bigint hint) / `all` / a `category` read. |
+| `check_notifications` | Quick unread count. `user.checkNotifications`. |
+
 ### Messaging (auth)
 | Tool | Description |
 |---|---|
-| `send_direct_message` | Lookup → `chat.createChat` → `chat.createMessage`. Markdown. |
+| `send_direct_message` | Lookup → `chat.createChat` → `chat.createMessage`. Markdown. Starts a NEW chat. |
+
+### Chat (auth) — read & reply to existing threads
+| Tool | Description |
+|---|---|
+| `list_chats` | List your conversations + participants. |
+| `get_chat_messages` | Read a chat's messages (paginated, `nextCursor`). |
+| `reply_to_chat` | Send into an existing chat (`chat.createMessage`, Markdown, ≤2000 chars). |
+| `mark_chat_read` | Blanket `chat.markAllAsRead`. |
+
+### Bounties (auth — flag-gated `bounties`)
+| Tool | Description |
+|---|---|
+| `create_bounty` | Create via `bounty.create` (NOT `bounty.upsert` — blocked for API keys). `startsAt`/`expiresAt` Date hints; ≥1 example image (UUID or URL). |
+| `update_bounty` | Update a bounty you own. `bounty.update`. |
+| `create_bounty_entry` | Submit an entry. `bountyEntry.upsert` (≥1 file + ≥1 image). |
+| `award_bounty` | Award a bounty to an entry. `bountyEntry.award { id }`. |
 
 ### Images (auth)
 | Tool | Description |
@@ -128,7 +178,7 @@ of truth — no hand-duplicated lists).
 ### Utility
 | Tool | Description |
 |---|---|
-| `whoami` | Resolve the current user (id, username, moderator?). Good deploy smoke test. |
+| `whoami` | Resolve the current user (id, username); surfaces onboarding/muted state when the API exposes it. Good deploy smoke test. |
 
 Every tool returns both a compact human-readable text block and a
 `structuredContent` JSON payload. Read-only tools are marked

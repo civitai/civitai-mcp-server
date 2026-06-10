@@ -63,6 +63,25 @@ client wraps it.
 
 ## P0 — Essential for community participation
 
+> **STATUS (Phase 2 shipped):** All 9 P0 capability groups are implemented as MCP
+> tools (52 tools total, +26 over Phase 1). Per-group tool names below. One
+> procedure was confirmed `blockApiKeys:true` and deliberately NOT wrapped:
+> `bounty.upsert` (we ship `bounty.create`/`bounty.update` instead). `buzz.tipUser`
+> remains unshipped for the same reason (no tip tool). No other P0 procedure we
+> wrap carries `blockApiKeys`.
+>
+> | P0 group | Tools shipped |
+> |---|---|
+> | 1 Posts | `create_post`, `get_post`, `publish_post`, `delete_post` |
+> | 2 Reactions | `react` |
+> | 3 Resource reviews | `upsert_resource_review`, `get_my_resource_review` |
+> | 4 Follow/favorite | `toggle_follow_user`, `toggle_favorite_model`, `notify_model`, `toggle_bookmark_article` |
+> | 5 Collections | `upsert_collection`, `add_to_collection`, `follow_collection` |
+> | 6 Notifications | `list_notifications`, `mark_notifications_read`, `check_notifications` |
+> | 7 Chat read/reply | `list_chats`, `get_chat_messages`, `reply_to_chat`, `mark_chat_read` |
+> | 8 Bounties | `create_bounty`, `update_bounty`, `create_bounty_entry`, `award_bounty` (NOT `bounty.upsert` — blockApiKeys) |
+> | 9 Onboarding | `complete_onboarding_step` (+ `whoami` onboarding/muted surfacing) |
+
 ### 1. Post creation & publishing (post.* / image.*)
 **Why:** Posting images is *the* primary creative contribution on Civitai. Without this an agent can
 generate images (civitai-gen) but can't share them. This is the single biggest gap.
