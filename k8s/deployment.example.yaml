@@ -1,0 +1,101 @@
+# Example Kubernetes manifests for the Civitai MCP server.
+# Adjust namespace, image, and resource limits to your cluster.
+#
+# The server talks to the Civitai app over the in-cluster service via
+# CIVITAI_API_URL. The API key comes from a Secret. In HTTP mode the server is
+# also multi-tenant: callers may send their own `Authorization: Bearer <key>`
+# header, which overrides CIVITAI_API_KEY for that request.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: civitai-mcp-server
+  namespace: default
+type: Opaque
+stringData:
+  # Fallback bearer used when a request omits an Authorization header.
+  # Leave empty to require per-request Authorization headers for auth tools.
+  CIVITAI_API_KEY: "replace-me"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: civitai-mcp-server
+  namespace: default
+  labels:
+    app: civitai-mcp-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: civitai-mcp-server
+  template:
+    metadata:
+      labels:
+        app: civitai-mcp-server
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: civitai-mcp-server
+          image: ghcr.io/civitai/civitai-mcp-server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3100
+          env:
+            - name: MCP_TRANSPORT
+              value: "http"
+            - name: PORT
+              value: "3100"
+            # Point at the in-cluster Civitai app service instead of public civitai.com.
+            - name: CIVITAI_API_URL
+              value: "http://civitai-app.default.svc.cluster.local:3000"
+            - name: CIVITAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: civitai-mcp-server
+                  key: CIVITAI_API_KEY
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: civitai-mcp-server
+  namespace: default
+  labels:
+    app: civitai-mcp-server
+spec:
+  selector:
+    app: civitai-mcp-server
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP
