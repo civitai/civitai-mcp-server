@@ -100,12 +100,12 @@ describe('decideAuthChallenge', () => {
 // Integration: real express app over an ephemeral port (no upstream network).
 // ---------------------------------------------------------------------------
 
-describe('HTTP routes', () => {
+describe('HTTP routes (OAuth enabled)', () => {
   let server: Server;
   let base: string;
 
   beforeAll(async () => {
-    const { app } = createApp(parseConfig({}));
+    const { app } = createApp(parseConfig({ OAUTH_ENABLED: 'true' }));
     await new Promise<void>((resolve) => {
       server = app.listen(0, '127.0.0.1', resolve);
     });
@@ -182,6 +182,46 @@ describe('HTTP routes', () => {
       }),
     });
     // Reaches the transport (token is not validated here); just not a 401.
+    expect(res.status).not.toBe(401);
+  });
+});
+
+// Default (token-only) mode: OAUTH_ENABLED unset → no protected-resource metadata
+// and no 401 challenge; an unauthenticated required call falls through to the
+// transport and surfaces the normal "set CIVITAI_API_KEY" tool error.
+describe('HTTP routes (OAuth disabled — token-only default)', () => {
+  let server: Server;
+  let base: string;
+
+  beforeAll(async () => {
+    const { app } = createApp(parseConfig({}));
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, '127.0.0.1', resolve);
+    });
+    const { port } = server.address() as AddressInfo;
+    base = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('does NOT serve protected-resource metadata (404)', async () => {
+    const res = await fetch(`${base}${PROTECTED_RESOURCE_PATH}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('does NOT challenge a required tool call with no Authorization', async () => {
+    const res = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 99,
+        method: 'tools/call',
+        params: { name: 'create_post', arguments: {} },
+      }),
+    });
     expect(res.status).not.toBe(401);
   });
 });

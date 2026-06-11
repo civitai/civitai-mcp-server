@@ -158,6 +158,7 @@ in-cluster Civitai service, readiness/liveness probes on `/healthz`.
 | `MCP_TRANSPORT` | `http` | `http` (Streamable HTTP) or `stdio` (local dev / desktop MCP clients). |
 | `PORT` | `3100` | HTTP listen port (http transport only). |
 | `PUBLIC_BASE_URL` | — | Optional canonical public base URL (e.g. `https://mcp.civitai.com`). When set, the advertised MCP endpoint in the landing page / `llms.txt` uses this instead of deriving it from the request `Host` header. Set it on the canonical hosted deployment so it always advertises its public address even behind proxies that don't forward `Host`/`X-Forwarded-*` reliably. Default: unset (Host-derived). |
+| `OAUTH_ENABLED` | `false` | Gates one-click OAuth (RFC 9728 protected-resource metadata + the 401 `WWW-Authenticate` challenge). Off = token-only mode. Turn on only once Civitai's OAuth dynamic client registration is live. See [OAuth one-click connect](#oauth-one-click-connect-opt-in-off-by-default). |
 | `CIVITAI_USER_ID` | — | Optional: skip the `user.getToken` JWT round-trip for self-id resolution. |
 | `CIVITAI_UPLOAD_MAX_BYTES` | `10485760` | Max bytes accepted for an image fetched/decoded by `upload_image` (10 MB). Guards against memory exhaustion. |
 | `CIVITAI_UPLOAD_ALLOWED_HOSTS` | — | CSV allowlist of hostnames permitted for URL-based image uploads. When set, only these hosts (and subdomains) may be fetched. Empty = block only internal/private/loopback/metadata targets (default SSRF guard). |
@@ -308,12 +309,19 @@ render the same list.
 - **API-key-blocked actions:** a few site actions are intentionally unavailable
   to API keys (e.g. tipping buzz) and are not shipped as tools.
 
-### OAuth one-click connect
+### OAuth one-click connect (opt-in, off by default)
 
-The server is an OAuth 2.0 *resource server* (RFC 9728 / RFC 6750). Once the
-Civitai app's OAuth dynamic-client-registration (DCR) ships, MCP clients can
-connect with no manually pasted API key - they discover the authorization server
-and run the standard authorization-code flow on first use:
+> **Off by default.** Set `OAUTH_ENABLED=true` to turn this on. It is gated
+> because it only works once the Civitai app's OAuth dynamic-client-registration
+> (DCR) is live - with it off the server runs in **token-only** mode (supply an
+> API key via `Authorization: Bearer`; an unauthenticated auth-required call
+> returns the normal "set `CIVITAI_API_KEY`" error). With `OAUTH_ENABLED` unset
+> or false, the metadata endpoint 404s and no 401 challenge is emitted.
+
+The server is an OAuth 2.0 *resource server* (RFC 9728 / RFC 6750). When
+`OAUTH_ENABLED=true` and the Civitai app's DCR is live, MCP clients can connect
+with no manually pasted API key - they discover the authorization server and run
+the standard authorization-code flow on first use:
 
 1. The client `POST`s a `tools/call` for an auth-required tool **without** an
    `Authorization` header.

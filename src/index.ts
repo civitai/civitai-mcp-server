@@ -81,10 +81,15 @@ export function createApp(config: Config): { app: express.Express; toolCount: nu
   // (Civitai) and supported scopes so an MCP client that hit a 401 can discover
   // where to run the OAuth flow. `resource` is the called MCP endpoint and must
   // match exactly — in prod set PUBLIC_BASE_URL=https://mcp.civitai.com.
-  app.get(PROTECTED_RESOURCE_PATH, (req: Request, res: Response) => {
-    const baseUrl = baseUrlFromRequest(req, config.publicBaseUrl);
-    res.status(200).json(buildProtectedResourceMetadata(baseUrl, config.apiUrl));
-  });
+  // Only advertised when OAUTH_ENABLED is on. Off by default until Civitai's OAuth
+  // Dynamic Client Registration ships — otherwise a client would discover an auth
+  // flow that dead-ends at the missing register endpoint.
+  if (config.oauthEnabled) {
+    app.get(PROTECTED_RESOURCE_PATH, (req: Request, res: Response) => {
+      const baseUrl = baseUrlFromRequest(req, config.publicBaseUrl);
+      res.status(200).json(buildProtectedResourceMetadata(baseUrl, config.apiUrl));
+    });
+  }
 
   // Plain liveness/readiness probe — never touches upstream.
   app.get('/healthz', (_req: Request, res: Response) => {
@@ -145,8 +150,13 @@ export function createApp(config: Config): { app: express.Express; toolCount: nu
     // Presence-only check — an invalid/expired token still passes here and fails
     // upstream when the tool calls Civitai. Batch rule: if ANY call in a batch is
     // `required` and no bearer is present, the whole request is challenged.
+    // OAuth challenge is gated by OAUTH_ENABLED. When off (token-only mode), an
+    // unauthenticated auth-required call falls through to the transport and the
+    // tool returns the normal "set CIVITAI_API_KEY" error instead of a 401.
     const hasBearer = bearerFromHeader(req.headers.authorization) !== undefined;
-    const decision = decideAuthChallenge(req.body, hasBearer, toolAuth);
+    const decision = config.oauthEnabled
+      ? decideAuthChallenge(req.body, hasBearer, toolAuth)
+      : { challenge: false, id: null };
     if (decision.challenge) {
       const baseUrl = baseUrlFromRequest(req, config.publicBaseUrl);
       res

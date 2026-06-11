@@ -50,6 +50,18 @@ const ConfigSchema = z.object({
     .url()
     .optional()
     .transform((u) => (u ? u.replace(/\/+$/, '') : u)),
+  /**
+   * Gate for the one-click OAuth surface (RFC 9728 protected-resource metadata +
+   * the 401 WWW-Authenticate challenge). Default OFF: until Civitai's OAuth
+   * Dynamic Client Registration ships, an unauthenticated call to an auth-required
+   * tool returns the normal "set CIVITAI_API_KEY" tool error instead of a 401 that
+   * would bounce the client into an OAuth flow that dead-ends at the missing
+   * register endpoint. Flip to true once DCR is live.
+   */
+  oauthEnabled: z
+    .union([z.boolean(), z.string()])
+    .default(false)
+    .transform((v) => v === true || v === 'true' || v === '1'),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -69,6 +81,7 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     uploadAllowedHosts: csvList(env.CIVITAI_UPLOAD_ALLOWED_HOSTS),
     mcpAllowedHosts: csvList(env.MCP_ALLOWED_HOSTS),
     publicBaseUrl: env.PUBLIC_BASE_URL,
+    oauthEnabled: env.OAUTH_ENABLED,
   });
 }
 
