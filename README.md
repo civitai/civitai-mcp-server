@@ -42,13 +42,13 @@ claude mcp add --transport http civitai https://mcp.civitai.com/mcp \
 
 ### Claude Desktop / claude.ai (custom connector)
 
-Settings → Connectors → **Add custom connector**. Choose a remote MCP / HTTP
-connector and use:
-
-```
-URL:  https://mcp.civitai.com/mcp
-Auth: Bearer YOUR_CIVITAI_API_KEY
-```
+> **Note:** the claude.ai / Claude Desktop custom-connector UI is **OAuth-only** — it
+> has no field for a static API key or custom header
+> ([anthropics/claude-ai-mcp#112](https://github.com/anthropics/claude-ai-mcp/issues/112)).
+> Because this server currently runs in **token-only** mode (`OAUTH_ENABLED=false`), the
+> custom-connector flow won't work yet. Use **Claude Code**, **Cursor**, or any client that
+> supports a bearer header. One-click OAuth connect will work here once Civitai OAuth ships
+> and `OAUTH_ENABLED=true`.
 
 ### Cursor (`~/.cursor/mcp.json`)
 

@@ -357,10 +357,10 @@ ${rows}
       </div>
       <div class="panel card">
         <h3>claude.ai / Claude Desktop</h3>
-        <p class="muted">Settings → Connectors → Add custom connector. Use a remote MCP / HTTP
-        connector with:</p>
-        <pre><code>URL:  ${escapeHtml(mcpUrl)}
-Auth: Bearer YOUR_CIVITAI_API_KEY</code></pre>
+        <p class="muted">Custom connectors here are <strong>OAuth-only</strong> — the UI has no
+        field for a static API key. Until Civitai OAuth is live, use Claude <em>Code</em> (left)
+        or Cursor (below). The hosted endpoint is:</p>
+        <pre><code>${escapeHtml(mcpUrl)}</code></pre>
         <h3 style="margin-top:18px;">Cursor / generic HTTP</h3>
         <pre><code>${cursorJson}</code></pre>
       </div>
