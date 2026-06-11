@@ -1,9 +1,10 @@
-{
+﻿{
   "name": "civitai-mcp-server",
   "version": "0.1.0",
   "private": true,
   "description": "Model Context Protocol server that turns an AI agent into a full Civitai participant: browse, post, react, review, follow, collect, comment, message, and run bounties via Civitai's REST and tRPC APIs.",
   "license": "Apache-2.0",
+  "packageManager": "pnpm@10.12.1",
   "author": "Civitai",
   "homepage": "https://mcp.civitai.com",
   "repository": {
@@ -50,3 +51,4 @@
     "vitest": "^2.1.8"
   }
 }
+
