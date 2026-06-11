@@ -147,6 +147,35 @@ Read the skill `.mjs` sources for exact tRPC procedure names and payload shapes 
 - Pagination: return `nextCursor` in structured output, describe in tool description
 - Drop CLI-isms (no `--dry-run`; MCP clients can inspect schemas). Keep `dryRun?: boolean` ONLY on destructive/publish tools if cheap.
 
+## OAuth resource-server (one-click connect)
+
+The server is an OAuth 2.0 resource server (RFC 9728 + RFC 6750). Once the
+Civitai app's OAuth dynamic-client-registration (DCR) ships, MCP clients connect
+with **no manually pasted API key** - they discover the authorization server and
+run the authorization-code flow on first use. Two additive behaviors:
+
+- **`GET /.well-known/oauth-protected-resource`** (`src/lib/oauth.ts`): Protected
+  Resource Metadata - `resource` = the `/mcp` endpoint, `authorization_servers` =
+  `CIVITAI_API_URL` (e.g. `https://civitai.com`), `scopes_supported` = the
+  canonical scope names (`user:read` … `models:write`),
+  `bearer_methods_supported: ["header"]`.
+- **401 challenge** in `POST /mcp`: a `tools/call` for an auth-`required` tool
+  with no `Authorization: Bearer` is short-circuited at the HTTP layer with
+  `401 + WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource"`
+  and a JSON-RPC-shaped error (`code: -32001`). This is the trigger MCP clients
+  need - a JSON-RPC `200 + isError` is invisible to the OAuth machinery. Browse
+  tools stay anonymous; `initialize` / `tools/list` / `notifications/*` / `ping`
+  are never challenged. Batch: if any call needs auth and no bearer is present,
+  the whole request is challenged. Token is **not** validated here (presence is
+  enough); a bad token fails upstream at the tool call.
+
+Each tool is tagged `auth: 'public' | 'required'` at registration (default:
+Browse category = public, everything else = required), surfaced via
+`buildToolAuthMap(catalog)` for the HTTP layer to consult.
+
+**Prod:** set `PUBLIC_BASE_URL=https://mcp.civitai.com` so the advertised
+`resource` exactly matches the called endpoint (OAuth resource matching is strict).
+
 ## Non-goals
 
 - No generation tools (civitai-gen stays separate)

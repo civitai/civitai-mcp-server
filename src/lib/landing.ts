@@ -7,6 +7,10 @@
  * drift: the tool list is never hand-duplicated.
  */
 
+/** Auth requirement for a tool. `public` tools work anonymously; `required`
+ *  tools need an Authorization: Bearer header (and trigger the OAuth challenge). */
+export type ToolAuth = 'public' | 'required';
+
 /** One registered tool, captured at registration time. */
 export interface ToolCatalogEntry {
   name: string;
@@ -15,6 +19,8 @@ export interface ToolCatalogEntry {
   category: string;
   readOnly: boolean;
   destructive: boolean;
+  /** Whether the tool can run anonymously or needs a bearer token. */
+  auth: ToolAuth;
 }
 
 /** Server identity + tool catalog, the input to both renderers. */

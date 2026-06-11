@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { Config } from './config.js';
 import { bearerFromHeader } from './client/auth.js';
 import { buildServices, fail, type Services, type ToolResult } from './tools/helpers.js';
-import type { ToolCatalogEntry } from './lib/landing.js';
+import type { ToolAuth, ToolCatalogEntry } from './lib/landing.js';
 
 import { browseTools } from './tools/browse.js';
 import { articleTools } from './tools/articles.js';
@@ -31,7 +31,18 @@ interface ToolConfig<Shape extends ZodRawShape> {
   description: string;
   inputSchema?: Shape;
   annotations?: ToolAnnotations;
+  /**
+   * Auth requirement. Drives the HTTP-layer OAuth 401 challenge in index.ts.
+   * When omitted it defaults from the tool's category (the Browse category is
+   * the only anonymous one). `required` tools call `requireKey()` internally;
+   * tagging them lets the HTTP layer challenge BEFORE the JSON-RPC layer so MCP
+   * clients see a real 401 + WWW-Authenticate and can start the OAuth flow.
+   */
+  auth?: ToolAuth;
 }
+
+/** The single category whose tools run anonymously (no bearer required). */
+const PUBLIC_CATEGORY = 'Browse (no auth required)';
 
 /** Registrar passed to each tool module: `reg(name, config, handler)`. */
 export type Registrar = <Shape extends ZodRawShape>(
@@ -64,6 +75,10 @@ export function createServer(config: Config): BuiltServer {
 
   const reg: Registrar = (name, toolConfig, handlerFn) => {
     toolCount++;
+    // Default: Browse tools are public, everything else needs a bearer. A tool
+    // may override explicitly via `auth` in its config.
+    const auth: ToolAuth =
+      toolConfig.auth ?? (currentCategory === PUBLIC_CATEGORY ? 'public' : 'required');
     catalog.push({
       name,
       title: toolConfig.title,
@@ -71,6 +86,7 @@ export function createServer(config: Config): BuiltServer {
       category: currentCategory,
       readOnly: toolConfig.annotations?.readOnlyHint === true,
       destructive: toolConfig.annotations?.destructiveHint === true,
+      auth,
     });
     server.registerTool(
       name,
@@ -118,4 +134,15 @@ export function createServer(config: Config): BuiltServer {
   }
 
   return { server, toolCount, catalog };
+}
+
+/**
+ * Build a name -> auth-requirement lookup from a tool catalog. The HTTP layer
+ * (index.ts) consults this to decide whether an unauthenticated `tools/call`
+ * should be short-circuited with an OAuth 401 challenge. Unknown tool names are
+ * treated as `public` by callers (an unknown name is the transport's problem,
+ * not an auth problem — let it produce a proper JSON-RPC method error).
+ */
+export function buildToolAuthMap(catalog: ToolCatalogEntry[]): Map<string, ToolAuth> {
+  return new Map(catalog.map((t) => [t.name, t.auth]));
 }

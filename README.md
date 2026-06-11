@@ -308,6 +308,40 @@ render the same list.
 - **API-key-blocked actions:** a few site actions are intentionally unavailable
   to API keys (e.g. tipping buzz) and are not shipped as tools.
 
+### OAuth one-click connect
+
+The server is an OAuth 2.0 *resource server* (RFC 9728 / RFC 6750). Once the
+Civitai app's OAuth dynamic-client-registration (DCR) ships, MCP clients can
+connect with no manually pasted API key - they discover the authorization server
+and run the standard authorization-code flow on first use:
+
+1. The client `POST`s a `tools/call` for an auth-required tool **without** an
+   `Authorization` header.
+2. The server replies **HTTP 401** with
+   `WWW-Authenticate: Bearer resource_metadata="<base>/.well-known/oauth-protected-resource"`.
+3. The client fetches `GET /.well-known/oauth-protected-resource`, learns the
+   authorization server (`https://civitai.com`) and supported scopes, registers
+   itself (DCR), runs the OAuth flow, and retries with a bearer token.
+
+Two behaviors back this:
+
+- **`GET /.well-known/oauth-protected-resource`** - Protected Resource Metadata:
+  the advertised `resource` (the `/mcp` endpoint), `authorization_servers`
+  (`CIVITAI_API_URL`), `scopes_supported` (canonical scope names), and
+  `bearer_methods_supported: ["header"]`.
+- **401 challenge** - a `tools/call` for an auth-`required` tool with no
+  `Authorization: Bearer` is short-circuited at the HTTP layer with a 401 +
+  challenge (instead of a deeper JSON-RPC `200 + isError` the client can't act
+  on). Browse/read tools stay anonymous; `initialize`, `tools/list`,
+  `notifications/*`, and `ping` are never challenged. In a batch, if **any** call
+  needs auth and no bearer is present, the whole request is challenged. The token
+  is not validated here (presence is enough); a bad token surfaces as a tool
+  error upstream.
+
+> **Prod note:** set `PUBLIC_BASE_URL=https://mcp.civitai.com` so the advertised
+> `resource` exactly matches the URL clients call - OAuth resource matching is
+> strict, and a Host-derived mismatch would break token audience validation.
+
 ---
 
 ## The `/llms.txt` trick
