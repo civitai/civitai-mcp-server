@@ -9,6 +9,7 @@ import { collectionTools } from '../src/tools/collections.js';
 import { notificationTools } from '../src/tools/notifications.js';
 import { chatTools } from '../src/tools/chat.js';
 import { bountyTools } from '../src/tools/bounties.js';
+import { whoamiTools } from '../src/tools/whoami.js';
 
 /**
  * Capture each tool module's handlers via a fake registrar so we can invoke a
@@ -56,16 +57,17 @@ function stubTrpc(svc: Services, responder: (procedure: string, input: unknown) 
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('create_post chaining', () => {
-  it('creates -> addImage (ordered, uuid url) -> publishes with Date hint', async () => {
+describe('create_post via composite endpoint', () => {
+  it('calls post.createWithImages once with sequentially-indexed images', async () => {
     const tools = collect(postTools);
     const { schema, handler } = tools.get('create_post')!;
     const svc = services();
-    const calls = stubTrpc(svc, (proc) => {
-      if (proc === 'post.create') return { id: 77 };
-      if (proc === 'post.addImage') return { id: Math.floor(Math.random() * 1000) };
-      return {};
-    });
+    const calls = stubTrpc(svc, () => ({
+      id: 77,
+      publishedAt: '2026-06-10T00:00:00.000Z',
+      imageIds: [1, 2],
+      nsfwLevel: 1,
+    }));
 
     const args = parse(schema, {
       title: 'Hi',
@@ -75,47 +77,54 @@ describe('create_post chaining', () => {
     const res = await handler(args, svc);
     expect(res.isError).toBeUndefined();
 
-    const procs = calls.map((c) => c.procedure);
-    expect(procs).toEqual(['post.create', 'post.addImage', 'post.addImage', 'post.update']);
+    // Exactly one call, to the composite endpoint.
+    expect(calls.map((c) => c.procedure)).toEqual(['post.createWithImages']);
+    const input = calls[0]!.input as Record<string, unknown>;
+    expect(input).toMatchObject({ title: 'Hi', publish: true });
 
-    // Images carry the UUID in `url` and ordered index.
-    const img0 = calls[1]!.input as Record<string, unknown>;
-    const img1 = calls[2]!.input as Record<string, unknown>;
-    expect(img0).toMatchObject({ postId: 77, url: 'uuid-a', index: 0, type: 'image', width: 100, height: 50 });
-    expect(img1).toMatchObject({ postId: 77, url: 'uuid-b', index: 1 });
+    // Images carry the UUID in `url`, sequential index, and dims.
+    const imgs = input.images as Array<Record<string, unknown>>;
+    expect(imgs).toHaveLength(2);
+    expect(imgs[0]).toMatchObject({ url: 'uuid-a', index: 0, type: 'image', width: 100, height: 50 });
+    expect(imgs[1]).toMatchObject({ url: 'uuid-b', index: 1, type: 'image' });
 
-    // Publish via post.update with the Date superjson hint.
-    expect(calls[3]!.procedure).toBe('post.update');
-    expect((calls[3]!.input as Record<string, unknown>).id).toBe(77);
-    expect(calls[3]!.meta).toEqual({ publishedAt: ['Date'] });
-  });
-
-  it('does NOT publish when publish=false', async () => {
-    const tools = collect(postTools);
-    const { schema, handler } = tools.get('create_post')!;
-    const svc = services();
-    const calls = stubTrpc(svc, (proc) => (proc === 'post.create' ? { id: 9 } : { id: 1 }));
-    await handler(parse(schema, { images: [{ uuid: 'u' }] }), svc);
-    expect(calls.map((c) => c.procedure)).toEqual(['post.create', 'post.addImage']);
-  });
-
-  it('deletes the orphan draft when addImage fails after create', async () => {
-    const tools = collect(postTools);
-    const { schema, handler } = tools.get('create_post')!;
-    const svc = services();
-    const calls = stubTrpc(svc, (proc) => {
-      if (proc === 'post.create') return { id: 55 };
-      if (proc === 'post.addImage') throw new Error('image scan rejected');
-      return {};
+    // Output surfaces imageIds and the publishedAt Date string.
+    expect(res.structuredContent).toMatchObject({
+      id: 77,
+      imageIds: [1, 2],
+      published: true,
+      publishedAt: '2026-06-10T00:00:00.000Z',
     });
-    // The handler re-throws after cleanup; the real registrar turns that into a
-    // fail() result. Assert the message reports cleanup and the delete ran.
-    await expect(
-      handler(parse(schema, { images: [{ uuid: 'u' }], publish: true }), svc)
-    ).rejects.toThrow(/Cleanup: draft post deleted/);
-    // create -> addImage(fails) -> delete cleanup
-    expect(calls.map((c) => c.procedure)).toEqual(['post.create', 'post.addImage', 'post.delete']);
-    expect((calls[2]!.input as Record<string, unknown>).id).toBe(55);
+  });
+
+  it('passes publish=false through to the composite call', async () => {
+    const tools = collect(postTools);
+    const { schema, handler } = tools.get('create_post')!;
+    const svc = services();
+    const calls = stubTrpc(svc, () => ({ id: 9, imageIds: [5] }));
+    await handler(parse(schema, { images: [{ uuid: 'u' }] }), svc);
+    expect(calls.map((c) => c.procedure)).toEqual(['post.createWithImages']);
+    expect((calls[0]!.input as Record<string, unknown>).publish).toBe(false);
+  });
+
+  it('forwards collectionId, tags, and modelVersionId', async () => {
+    const tools = collect(postTools);
+    const { schema, handler } = tools.get('create_post')!;
+    const svc = services();
+    const calls = stubTrpc(svc, () => ({ id: 1, imageIds: [] }));
+    await handler(
+      parse(schema, {
+        images: [{ uuid: 'u' }],
+        tags: ['anime'],
+        modelVersionId: 42,
+        collectionId: 7,
+      }),
+      svc
+    );
+    const input = calls[0]!.input as Record<string, unknown>;
+    expect(input).toMatchObject({ tags: ['anime'], modelVersionId: 42, collectionId: 7 });
+    // modelVersionId is stamped onto each image too.
+    expect((input.images as Array<Record<string, unknown>>)[0]).toMatchObject({ modelVersionId: 42 });
   });
 });
 
@@ -239,6 +248,87 @@ describe('chat payloads', () => {
     expect(calls[0]!.procedure).toBe('chat.createMessage');
     expect(calls[0]!.input).toMatchObject({ chatId: 4, content: 'hello', contentType: 'Markdown' });
   });
+
+  it('mark_chat_read marks one chat via chat.markChatRead { chatId }', async () => {
+    const tools = collect(chatTools);
+    const { schema, handler } = tools.get('mark_chat_read')!;
+    const svc = services();
+    const calls = stubTrpc(svc, () => ({ chatId: 4, lastViewedMessageId: 99 }));
+    const res = await handler(parse(schema, { chatId: 4 }), svc);
+    expect(calls[0]!.procedure).toBe('chat.markChatRead');
+    expect(calls[0]!.input).toEqual({ chatId: 4 });
+    expect(res.structuredContent).toMatchObject({ chatId: 4, lastViewedMessageId: 99 });
+  });
+
+  it('mark_all_chats_read blanket-clears via chat.markAllAsRead', async () => {
+    const tools = collect(chatTools);
+    const { schema, handler } = tools.get('mark_all_chats_read')!;
+    const svc = services();
+    const calls = stubTrpc(svc, () => undefined);
+    await handler(parse(schema, {}), svc);
+    expect(calls[0]!.procedure).toBe('chat.markAllAsRead');
+  });
+});
+
+describe('whoami uses user.getSelfStatus', () => {
+  it('calls user.getSelfStatus (GET) and surfaces onboarding/muted/moderator/tier', async () => {
+    const tools = collect(whoamiTools);
+    const { schema, handler } = tools.get('whoami')!;
+    const svc = services();
+    const calls = stubTrpc(svc, () => ({
+      id: 123,
+      username: 'agent',
+      onboarding: { raw: 15, completedSteps: ['TOS', 'Profile'], isOnboarded: true },
+      muted: false,
+      isModerator: true,
+      bannedAt: null,
+      deletedAt: null,
+      tier: 'gold',
+      subscriptionId: 'sub_1',
+    }));
+    const res = await handler(parse(schema, {}), svc);
+    expect(calls[0]!.procedure).toBe('user.getSelfStatus');
+    expect(calls[0]!.method).toBe('GET');
+    expect(res.structuredContent).toMatchObject({
+      id: 123,
+      username: 'agent',
+      isModerator: true,
+      isOnboarded: true,
+      completedSteps: ['TOS', 'Profile'],
+      muted: false,
+      tier: 'gold',
+      subscriptionId: 'sub_1',
+    });
+  });
+});
+
+describe('upsert_collection payload', () => {
+  it('sends name/type and only-set optional fields to collection.upsert', async () => {
+    const tools = collect(collectionTools);
+    const { schema, handler } = tools.get('upsert_collection')!;
+    const svc = services();
+    const calls = stubTrpc(svc, () => ({ id: 31 }));
+    await handler(
+      parse(schema, { name: 'Faves', description: 'my picks', read: 'Public' }),
+      svc
+    );
+    expect(calls[0]!.procedure).toBe('collection.upsert');
+    expect(calls[0]!.input).toEqual({
+      name: 'Faves',
+      type: 'Model',
+      description: 'my picks',
+      read: 'Public',
+    });
+  });
+
+  it('includes id when updating', async () => {
+    const tools = collect(collectionTools);
+    const { schema, handler } = tools.get('upsert_collection')!;
+    const svc = services();
+    const calls = stubTrpc(svc, () => ({ id: 5 }));
+    await handler(parse(schema, { id: 5, name: 'Renamed', type: 'Image' }), svc);
+    expect(calls[0]!.input).toEqual({ id: 5, name: 'Renamed', type: 'Image' });
+  });
 });
 
 describe('bounties', () => {
@@ -273,5 +363,62 @@ describe('bounties', () => {
     const calls = stubTrpc(svc, () => undefined);
     await handler(parse(schema, { entryId: 9 }), svc);
     expect(calls[0]).toMatchObject({ procedure: 'bountyEntry.award', input: { id: 9 } });
+  });
+
+  it('create_bounty_entry submits via bountyEntry.submit with files + imageUuids', async () => {
+    const tools = collect(bountyTools);
+    const { schema, handler } = tools.get('create_bounty_entry')!;
+    const svc = services();
+    const calls = stubTrpc(svc, () => ({ id: 88 }));
+    await handler(
+      parse(schema, {
+        bountyId: 12,
+        description: 'my entry',
+        ownRights: true,
+        files: [{ url: 's3://file.zip', name: 'file.zip', sizeKB: 1024, unlockAmount: 50 }],
+        images: [{ uuid: 'img-uuid' }],
+      }),
+      svc
+    );
+    expect(calls[0]!.procedure).toBe('bountyEntry.submit');
+    const input = calls[0]!.input as Record<string, unknown>;
+    expect(input).toMatchObject({ bountyId: 12, description: 'my entry', ownRights: true });
+    expect(input.imageUuids).toEqual(['img-uuid']);
+    expect((input.files as Array<Record<string, unknown>>)[0]).toMatchObject({
+      url: 's3://file.zip',
+      name: 'file.zip',
+      sizeKB: 1024,
+      unlockAmount: 50,
+    });
+  });
+
+  it('create_bounty accepts USDC currency', () => {
+    const tools = collect(bountyTools);
+    const { schema } = tools.get('create_bounty')!;
+    expect(() =>
+      parse(schema, {
+        name: 'B',
+        description: 'd',
+        unitAmount: 100,
+        currency: 'USDC',
+        type: 'ImageCreation',
+        startsAt: '2026-07-01T00:00:00Z',
+        expiresAt: '2026-07-10T00:00:00Z',
+        minBenefactorUnitAmount: 10,
+        images: [{ uuid: 'img-uuid' }],
+      })
+    ).not.toThrow();
+  });
+});
+
+describe('notification categories', () => {
+  it('accepts Creator and Referral categories', () => {
+    const tools = collect(notificationTools);
+    const { schema } = tools.get('list_notifications')!;
+    expect(() => parse(schema, { category: 'Creator' })).not.toThrow();
+    expect(() => parse(schema, { category: 'Referral' })).not.toThrow();
+
+    const mark = tools.get('mark_notifications_read')!;
+    expect(() => parse(mark.schema, { category: 'Referral' })).not.toThrow();
   });
 });

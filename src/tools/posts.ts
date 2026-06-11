@@ -7,19 +7,19 @@ import { uploadImage } from './images.js';
  * Post creation & publishing (post.* / image.*).
  *
  * The flagship community gap: an agent can generate images but, without this,
- * can't share them. `create_post` chains the full flow behind one tool:
+ * can't share them. `create_post` now wraps the single composite app endpoint
+ * `post.createWithImages` (mutation/POST, guarded, MediaWrite):
  *
  *   1. (optional) upload_image for any image given by URL -> UUID
- *   2. post.create            (guarded, MediaWrite) -> { id }
- *   3. post.addImage x N      (guarded, MediaWrite, ordered by index)
- *   4. (optional) post.update { id, publishedAt } to publish (verified, MediaWrite)
+ *   2. build images[] with sequential `index` (the `url` field is the upload UUID,
+ *      NOT an http URL — same rule as article covers)
+ *   3. ONE call to post.createWithImages (atomic; the server handles cleanup if a
+ *      part fails, so there is no orphan-draft window to clean up client-side)
  *
- * post.addImage's `url` field is a z.string().uuid() (image.schema.ts imageSchema)
- * — it is the upload UUID, NOT an http URL (same rule as article covers).
- * publishedAt is a z.date() so it needs the ['Date'] superjson hint.
+ * post.createWithImages output `publishedAt` is a superjson Date — callers reading
+ * structuredContent should treat it as a Date string.
  *
- * ORPHAN CLEANUP: if addImage or publish fails after post.create succeeds, we
- * attempt post.delete to remove the empty draft and report the partial state.
+ * Requires the MediaWrite scope on the API key (a Full key works).
  */
 
 interface PostRow {
@@ -30,6 +30,17 @@ interface PostRow {
   nsfwLevel?: number;
   imageCount?: number;
   user?: { id?: number; username?: string };
+}
+
+interface CreateWithImagesResult {
+  id: number;
+  title?: string | null;
+  detail?: string | null;
+  modelVersionId?: number | null;
+  collectionId?: number | null;
+  publishedAt?: string | null;
+  imageIds?: number[];
+  nsfwLevel?: number;
 }
 
 /** One image to attach. Exactly one of uuid / url is required. */
@@ -43,7 +54,7 @@ const postImageInput = z
   })
   .refine((v) => !!v.uuid || !!v.url, { message: 'Each image needs a uuid or a url' });
 
-/** Resolve a post image input to the UUID post.addImage expects. */
+/** Resolve a post image input to the UUID post.createWithImages expects. */
 async function resolveImageUuid(
   services: Services,
   img: { uuid?: string; url?: string; width?: number; height?: number }
@@ -60,11 +71,11 @@ export const postTools: ToolModule = (reg) => {
       title: 'Create (and optionally publish) a post',
       description:
         'Create a Civitai image post and attach images in order. This is the primary way to share creative work. ' +
-        'Chains post.create -> post.addImage (one call per image, ordered) -> optional publish via post.update { publishedAt }. ' +
-        'Each image is supplied by a pre-uploaded UUID or a URL (uploaded automatically). ' +
+        'Wraps the composite `post.createWithImages` endpoint in ONE atomic call: the server creates the post, ' +
+        'attaches every image (in the given order), and optionally publishes — handling cleanup itself if any part fails. ' +
+        'Each image is supplied by a pre-uploaded UUID or a URL (uploaded automatically first). ' +
         'Set publish=true to publish immediately (default false leaves it as a draft you can publish later with publish_post). ' +
-        'Requires an onboarded, non-muted account (post.create is a guarded procedure). ' +
-        'If attaching images or publishing fails after the post is created, the draft post is deleted and the partial state reported.',
+        'Requires an onboarded, non-muted account and the MediaWrite scope (a Full API key works).',
       inputSchema: {
         title: z.string().optional().describe('Post title'),
         detail: z.string().optional().describe('Post description/detail (HTML or plain text)'),
@@ -75,11 +86,6 @@ export const postTools: ToolModule = (reg) => {
           .int()
           .optional()
           .describe('Associate the post (and its images) with this model version id'),
-        nsfwLevel: z
-          .number()
-          .int()
-          .optional()
-          .describe('NSFW level override (normally derived server-side from image scanning)'),
         collectionId: z.number().int().optional().describe('Add the post to this contest/collection'),
         publish: z.boolean().default(false).describe('Publish immediately (else leave as draft)'),
       },
@@ -88,66 +94,45 @@ export const postTools: ToolModule = (reg) => {
     async (args, services) => {
       services.auth.requireKey();
 
-      // 1. Create the (draft) post.
-      const createInput: Record<string, unknown> = {};
-      if (args.title) createInput.title = args.title;
-      if (args.detail) createInput.detail = args.detail;
-      if (args.tags?.length) createInput.tags = args.tags;
-      if (args.modelVersionId) createInput.modelVersionId = args.modelVersionId;
-      if (args.collectionId) createInput.collectionId = args.collectionId;
-      const post = await services.trpc.call<PostRow>('post.create', createInput);
-      if (!post?.id) throw new Error('post.create did not return an id');
-
-      // 2. Attach images in order. On any failure, clean up the orphan draft.
-      const attached: number[] = [];
-      try {
-        for (let i = 0; i < args.images.length; i++) {
-          const resolved = await resolveImageUuid(services, args.images[i]!);
-          const addInput: Record<string, unknown> = {
-            postId: post.id,
-            url: resolved.uuid,
-            index: i,
-            type: args.images[i]!.type ?? 'image',
-          };
-          if (resolved.width) addInput.width = resolved.width;
-          if (resolved.height) addInput.height = resolved.height;
-          if (args.modelVersionId) addInput.modelVersionId = args.modelVersionId;
-          const added = await services.trpc.call<{ id?: number }>('post.addImage', addInput);
-          if (added?.id) attached.push(added.id);
-        }
-
-        // 3. Optionally publish.
-        if (args.publish) {
-          const updateInput: Record<string, unknown> = {
-            id: post.id,
-            publishedAt: new Date().toISOString(),
-          };
-          if (args.collectionId) updateInput.collectionId = args.collectionId;
-          await services.trpc.call('post.update', updateInput, 'POST', { publishedAt: ['Date'] });
-        }
-      } catch (err) {
-        // ORPHAN CLEANUP: try to delete the draft so we don't leave debris.
-        let cleanup = 'draft left in place (delete failed)';
-        try {
-          await services.trpc.call('post.delete', { id: post.id });
-          cleanup = 'draft post deleted';
-        } catch {
-          /* report below; nothing more we can do */
-        }
-        const reason = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `Post ${post.id} created but failed after ${attached.length}/${args.images.length} image(s): ${reason}. Cleanup: ${cleanup}.`
-        );
+      // Resolve each image to its upload UUID and build images[] with sequential
+      // index. `url` carries the UUID (not an http URL), same as article covers.
+      const images: Array<Record<string, unknown>> = [];
+      for (let i = 0; i < args.images.length; i++) {
+        const src = args.images[i]!;
+        const resolved = await resolveImageUuid(services, src);
+        const img: Record<string, unknown> = {
+          url: resolved.uuid,
+          index: i,
+          type: src.type ?? 'image',
+        };
+        if (resolved.width) img.width = resolved.width;
+        if (resolved.height) img.height = resolved.height;
+        if (args.modelVersionId) img.modelVersionId = args.modelVersionId;
+        images.push(img);
       }
 
-      const url = `${services.config.apiUrl}/posts/${post.id}`;
+      const input: Record<string, unknown> = { images, publish: args.publish };
+      if (args.title) input.title = args.title;
+      if (args.detail) input.detail = args.detail;
+      if (args.tags?.length) input.tags = args.tags;
+      if (args.modelVersionId) input.modelVersionId = args.modelVersionId;
+      if (args.collectionId) input.collectionId = args.collectionId;
+
+      // One atomic call. publishedAt comes back as a superjson Date.
+      const res = await services.trpc.call<CreateWithImagesResult>('post.createWithImages', input);
+      if (!res?.id) throw new Error('post.createWithImages did not return an id');
+
+      const imageIds = res.imageIds ?? [];
+      const url = `${services.config.apiUrl}/posts/${res.id}`;
       return ok(
-        `Post ${args.publish ? 'created and published' : 'created (draft)'}.\nID: ${post.id}\nImages attached: ${attached.length}\nURL: ${url}`,
+        `Post ${args.publish ? 'created and published' : 'created (draft)'}.\nID: ${res.id}\nImages attached: ${imageIds.length}\nURL: ${url}`,
         {
           ok: true,
-          id: post.id,
-          imageIds: attached,
+          id: res.id,
+          imageIds,
           published: args.publish,
+          publishedAt: res.publishedAt ?? null,
+          nsfwLevel: res.nsfwLevel,
           url,
         }
       );

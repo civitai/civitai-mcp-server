@@ -14,7 +14,9 @@ import { stripHtml } from '../lib/format.js';
  *    limit? (default 1000), cursor? (number) }.
  *  - chat.createMessage: protected, SocialWrite. { chatId, content(1-2000),
  *    contentType? (default Markdown), referenceMessageId? }.
- *  - chat.markAllAsRead: protected, takes no input.
+ *  - chat.markAllAsRead: protected, takes no input (blanket clear).
+ *  - chat.markChatRead: protected. { chatId } -> { chatId, lastViewedMessageId }
+ *    (mark a single conversation read).
  */
 
 interface ChatMember {
@@ -144,9 +146,36 @@ export const chatTools: ToolModule = (reg) => {
   reg(
     'mark_chat_read',
     {
-      title: 'Mark chats read',
+      title: 'Mark one chat read',
       description:
-        'Mark all of your chats as read (chat.markAllAsRead). This is a blanket clear across every conversation.',
+        'Mark a SINGLE chat conversation as read (chat.markChatRead) by advancing its lastViewedMessageId to the latest ' +
+        'message. Use mark_all_chats_read to clear every conversation at once.',
+      inputSchema: {
+        chatId: z.number().int().describe('Chat ID to mark read'),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    async (args, services) => {
+      services.auth.requireKey();
+      const res = await services.trpc.call<{ chatId?: number; lastViewedMessageId?: number | null }>(
+        'chat.markChatRead',
+        { chatId: args.chatId }
+      );
+      return ok(`Marked chat ${args.chatId} read.`, {
+        ok: true,
+        chatId: res?.chatId ?? args.chatId,
+        lastViewedMessageId: res?.lastViewedMessageId ?? null,
+      });
+    }
+  );
+
+  reg(
+    'mark_all_chats_read',
+    {
+      title: 'Mark all chats read',
+      description:
+        'Mark ALL of your chats as read (chat.markAllAsRead). This is a blanket clear across every conversation. ' +
+        'Use mark_chat_read to clear just one.',
       inputSchema: {},
       annotations: { readOnlyHint: false },
     },

@@ -18,11 +18,14 @@ import { uploadImage } from './images.js';
  *    minBenefactorUnitAmount, images[>=1, uuid-based], ... }. startsAt/expiresAt
  *    are z.date()/coerce -> need the ['Date'] superjson hint.
  *  - bounty.update (guarded, owner-checked): subset + { id, startsAt, expiresAt }.
- *  - bountyEntry.upsert (guarded): { id?, bountyId, files[>=1], images[>=1], ... }.
+ *  - bountyEntry.submit (composite, guarded, BountiesWrite, `bounties` flag, NO
+ *    blockApiKeys): { id?, bountyId, description?, ownRights?, files[>=1]
+ *    ({ url, name, sizeKB, unlockAmount?, currency?, benefactorsOnly? }),
+ *    imageUuids[>=1] (already-uploaded UUIDs) }.
  *  - bountyEntry.award (protected): { id }.
  */
 
-const CURRENCIES = ['BUZZ', 'USD'] as const;
+const CURRENCIES = ['USD', 'BUZZ', 'USDC'] as const;
 const BOUNTY_MODES = ['Individual', 'Split'] as const;
 const BOUNTY_TYPES = [
   'ModelCreation',
@@ -178,34 +181,67 @@ export const bountyTools: ToolModule = (reg) => {
     {
       title: 'Submit a bounty entry',
       description:
-        'Submit an entry to a bounty via bountyEntry.upsert (guarded, `bounties` flag). Requires at least one file (the ' +
-        'deliverable, as an uploaded file descriptor) and at least one example image. Files must already be uploaded; pass ' +
-        'their descriptors. Pass id to edit an existing entry.',
+        'Submit an entry to a bounty via the composite `bountyEntry.submit` endpoint (mutation/POST, guarded, `bounties` flag, ' +
+        'BountiesWrite scope). Requires at least one deliverable file (a pre-uploaded file reference: { url, name, sizeKB }) ' +
+        'and at least one example image (by UUID or URL — URLs are uploaded automatically to UUIDs). Files MUST already be ' +
+        'uploaded; pass their refs. Pass id to edit an existing entry.',
       inputSchema: {
-        bountyId: z.number().int().describe('Bounty ID being entered'),
+        bountyId: z.number().int().describe('Bounty ID being entered (required)'),
         id: z.number().int().optional().describe('Existing entry id to edit'),
-        files: z
-          .array(z.record(z.string(), z.unknown()))
-          .min(1)
-          .describe('Deliverable file descriptors (baseFileSchema shape: { url, name, sizeKB, ... }), at least one'),
-        images: z.array(exampleImageInput).min(1).describe('Example image(s) — at least one required'),
         description: z.string().optional().describe('Entry description (Markdown/HTML, sanitized)'),
         ownRights: z.boolean().optional().describe('Assert you own the rights to the deliverable'),
+        files: z
+          .array(
+            z.object({
+              url: z.string().describe('File URL/key of the already-uploaded deliverable (required)'),
+              name: z.string().describe('File name (required)'),
+              sizeKB: z.number().describe('File size in KB (required)'),
+              id: z.number().int().optional().describe('Existing file id (when editing)'),
+              unlockAmount: z
+                .number()
+                .int()
+                .optional()
+                .describe('Buzz/currency amount required to unlock this file (default 0)'),
+              currency: z.enum(CURRENCIES).optional().describe('Unlock currency (default BUZZ)'),
+              benefactorsOnly: z
+                .boolean()
+                .optional()
+                .describe('Restrict this file to benefactors only (default false)'),
+            })
+          )
+          .min(1)
+          .describe('Deliverable file refs (must be pre-uploaded): each { url, name, sizeKB, ... }, at least one'),
+        images: z
+          .array(exampleImageInput)
+          .min(1)
+          .describe('Example image(s) — at least one required (UUID or URL; URLs auto-uploaded)'),
       },
       annotations: { readOnlyHint: false },
     },
     async (args, services) => {
       services.auth.requireKey();
-      const images = await resolveImages(services, args.images);
+      // Example images -> already-uploaded UUIDs (bountyEntry.submit takes imageUuids[]).
+      const resolved = await resolveImages(services, args.images);
+      const imageUuids = resolved.map((img) => img.url as string);
+
+      const files = args.files.map((f) => {
+        const out: Record<string, unknown> = { url: f.url, name: f.name, sizeKB: f.sizeKB };
+        if (f.id !== undefined) out.id = f.id;
+        if (f.unlockAmount !== undefined) out.unlockAmount = f.unlockAmount;
+        if (f.currency !== undefined) out.currency = f.currency;
+        if (f.benefactorsOnly !== undefined) out.benefactorsOnly = f.benefactorsOnly;
+        return out;
+      });
+
       const input: Record<string, unknown> = {
         bountyId: args.bountyId,
-        files: args.files,
-        images,
+        files,
+        imageUuids,
       };
       if (args.id) input.id = args.id;
       if (args.description) input.description = args.description;
       if (args.ownRights !== undefined) input.ownRights = args.ownRights;
-      const res = await services.trpc.call<{ id?: number }>('bountyEntry.upsert', input);
+      const res = await services.trpc.call<{ id?: number }>('bountyEntry.submit', input);
       return ok(
         `Bounty entry ${args.id ? 'updated' : 'submitted'} for bounty ${args.bountyId} (entry ${res?.id ?? '(unknown)'}).`,
         { ok: true, id: res?.id, bountyId: args.bountyId }

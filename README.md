@@ -89,7 +89,7 @@ of truth — no hand-duplicated lists).
 ### Posts (auth — onboarded, non-muted)
 | Tool | Description |
 |---|---|
-| `create_post` | Flagship sharing flow: `post.create` → ordered `post.addImage` (UUID, auto-uploads URLs) → optional publish via `post.update { publishedAt: ['Date'] }`. Deletes the orphan draft if attaching/publishing fails. |
+| `create_post` | Flagship sharing flow via the composite `post.createWithImages` (ONE atomic call: create + ordered images + optional publish; server handles cleanup). Images by UUID or URL (auto-uploaded); sequential `index`. `publishedAt` returns as a Date. MediaWrite scope. |
 | `get_post` | Fetch a post by ID. |
 | `publish_post` | Publish a draft via `post.update { publishedAt }` (Date hint). |
 | `delete_post` | Delete a post you own. |
@@ -148,14 +148,15 @@ of truth — no hand-duplicated lists).
 | `list_chats` | List your conversations + participants. |
 | `get_chat_messages` | Read a chat's messages (paginated, `nextCursor`). |
 | `reply_to_chat` | Send into an existing chat (`chat.createMessage`, Markdown, ≤2000 chars). |
-| `mark_chat_read` | Blanket `chat.markAllAsRead`. |
+| `mark_chat_read` | Mark ONE chat read via `chat.markChatRead { chatId }` (advances `lastViewedMessageId`). |
+| `mark_all_chats_read` | Blanket clear of every conversation via `chat.markAllAsRead`. |
 
 ### Bounties (auth — flag-gated `bounties`)
 | Tool | Description |
 |---|---|
 | `create_bounty` | Create via `bounty.create` (NOT `bounty.upsert` — blocked for API keys). `startsAt`/`expiresAt` Date hints; ≥1 example image (UUID or URL). |
 | `update_bounty` | Update a bounty you own. `bounty.update`. |
-| `create_bounty_entry` | Submit an entry. `bountyEntry.upsert` (≥1 file + ≥1 image). |
+| `create_bounty_entry` | Submit an entry via the composite `bountyEntry.submit` (≥1 pre-uploaded file ref `{url,name,sizeKB}` + ≥1 image UUID/URL). BountiesWrite scope. |
 | `award_bounty` | Award a bounty to an entry. `bountyEntry.award { id }`. |
 
 ### Images (auth)
@@ -178,7 +179,7 @@ of truth — no hand-duplicated lists).
 ### Utility
 | Tool | Description |
 |---|---|
-| `whoami` | Resolve the current user (id, username); surfaces onboarding/muted state when the API exposes it. Good deploy smoke test. |
+| `whoami` | Resolve the current user (id, username) and authoritative status via `user.getSelfStatus`: real `isOnboarded` + `completedSteps`, `muted`, `isModerator`, subscription `tier`. Good deploy smoke test. |
 
 Every tool returns both a compact human-readable text block and a
 `structuredContent` JSON payload. Read-only tools are marked

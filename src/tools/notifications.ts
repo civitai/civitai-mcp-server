@@ -22,7 +22,17 @@ interface NotificationRow {
   details?: Record<string, unknown>;
 }
 
-const CATEGORIES = ['Comment', 'Update', 'Milestone', 'Bounty', 'Buzz', 'System', 'Other'] as const;
+const CATEGORIES = [
+  'Comment',
+  'Update',
+  'Milestone',
+  'Bounty',
+  'Buzz',
+  'Creator',
+  'Referral',
+  'System',
+  'Other',
+] as const;
 
 export const notificationTools: ToolModule = (reg) => {
   reg(
