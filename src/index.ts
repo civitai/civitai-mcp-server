@@ -32,12 +32,15 @@ async function startStdio(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-function baseUrlFromRequest(req: Request): string {
-  return resolveBaseUrl({
-    forwardedProto: headerValue(req.headers['x-forwarded-proto']),
-    forwardedHost: headerValue(req.headers['x-forwarded-host']),
-    host: headerValue(req.headers.host),
-  });
+function baseUrlFromRequest(req: Request, override?: string): string {
+  return resolveBaseUrl(
+    {
+      forwardedProto: headerValue(req.headers['x-forwarded-proto']),
+      forwardedHost: headerValue(req.headers['x-forwarded-host']),
+      host: headerValue(req.headers.host),
+    },
+    override
+  );
 }
 
 function headerValue(value: string | string[] | undefined): string | undefined {
@@ -64,7 +67,9 @@ async function startHttp(): Promise<void> {
 
   // llms.txt (llms.txt standard): always the agent-facing self-setup guide.
   app.get('/llms.txt', (req: Request, res: Response) => {
-    res.type('text/plain; charset=utf-8').send(renderLlmsTxt(landingData, baseUrlFromRequest(req)));
+    res
+      .type('text/plain; charset=utf-8')
+      .send(renderLlmsTxt(landingData, baseUrlFromRequest(req, config.publicBaseUrl)));
   });
 
   // Dual-audience index. Content-negotiate on User-Agent:
@@ -73,7 +78,7 @@ async function startHttp(): Promise<void> {
   // MCP Streamable HTTP clients use POST /mcp (and may GET it with an SSE Accept
   // header); a plain browser/agent GET on "/" never collides with that.
   app.get('/', (req: Request, res: Response) => {
-    const baseUrl = baseUrlFromRequest(req);
+    const baseUrl = baseUrlFromRequest(req, config.publicBaseUrl);
     if (isBrowserUserAgent(headerValue(req.headers['user-agent']))) {
       res.type('text/html; charset=utf-8').send(renderLandingHtml(landingData, baseUrl));
     } else {

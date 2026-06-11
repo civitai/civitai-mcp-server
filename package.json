@@ -2,7 +2,25 @@
   "name": "civitai-mcp-server",
   "version": "0.1.0",
   "private": true,
-  "description": "MCP server exposing Civitai's REST and tRPC APIs as tools (browse, articles, comments, messaging, announcements, changelog, image upload).",
+  "description": "Model Context Protocol server that turns an AI agent into a full Civitai participant: browse, post, react, review, follow, collect, comment, message, and run bounties via Civitai's REST and tRPC APIs.",
+  "license": "Apache-2.0",
+  "author": "Civitai",
+  "homepage": "https://mcp.civitai.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/civitai/civitai-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/civitai/civitai-mcp-server/issues"
+  },
+  "keywords": [
+    "mcp",
+    "civitai",
+    "ai-agents",
+    "model-context-protocol",
+    "llm",
+    "trpc"
+  ],
   "type": "module",
   "engines": {
     "node": ">=20"

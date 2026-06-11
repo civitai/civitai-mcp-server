@@ -32,19 +32,31 @@ export function isBrowserUserAgent(userAgent: string | undefined): boolean {
 }
 
 /**
- * Resolve the externally-visible base URL of this server from request headers,
- * honoring the proxy/ingress headers k8s sets (X-Forwarded-Proto / -Host).
- * Falls back to the Host header and http when nothing is forwarded.
+ * Resolve the externally-visible base URL of this server.
+ *
+ * If `override` is provided (the `PUBLIC_BASE_URL` env knob), it wins outright —
+ * the canonical hosted deployment advertises its fixed address regardless of
+ * what a proxy forwards. Otherwise the URL is derived from request headers,
+ * honoring the proxy/ingress headers k8s sets (X-Forwarded-Proto / -Host), and
+ * falling back to the Host header and http when nothing is forwarded.
  */
-export function resolveBaseUrl(headers: {
-  forwardedProto?: string;
-  forwardedHost?: string;
-  host?: string;
-}): string {
+export function resolveBaseUrl(
+  headers: {
+    forwardedProto?: string;
+    forwardedHost?: string;
+    host?: string;
+  },
+  override?: string
+): string {
+  const canonical = override?.replace(/\/+$/, '');
+  if (canonical) return canonical;
   const proto = first(headers.forwardedProto) ?? 'http';
   const host = first(headers.forwardedHost) ?? headers.host ?? 'localhost';
   return `${proto}://${host}`;
 }
+
+/** Canonical hosted endpoint, used as a documented fallback in static copy. */
+export const CANONICAL_BASE_URL = 'https://mcp.civitai.com';
 
 /** Take the first value of a possibly comma-joined forwarded header. */
 function first(value: string | undefined): string | undefined {
@@ -94,14 +106,19 @@ export function renderLlmsTxt(data: LandingData, baseUrl: string): string {
   lines.push(`# ${data.serverName}`);
   lines.push('');
   lines.push(
-    '> MCP (Model Context Protocol) server for Civitai. Browse models, images, and creators; ' +
-      'write and publish articles; manage comments; send direct messages; upload images; and ' +
-      '(for moderators) manage site announcements and changelog entries.'
+    '> MCP (Model Context Protocol) server that turns an AI agent into a full Civitai ' +
+      'participant. Browse models, images, and creators; post and publish images; react, ' +
+      'review, follow, and collect; write articles and comments; send and reply to direct ' +
+      'messages; create and enter bounties; and (for moderators) manage site announcements ' +
+      'and the changelog.'
   );
   lines.push('');
   lines.push('## Connect');
   lines.push('');
   lines.push(`- MCP endpoint: ${mcpUrl}`);
+  if (mcpUrl !== `${CANONICAL_BASE_URL}/mcp`) {
+    lines.push(`- Hosted (recommended): ${CANONICAL_BASE_URL}/mcp`);
+  }
   lines.push('- Transport: Streamable HTTP (JSON-RPC over HTTP POST)');
   lines.push(
     '- Auth: send `Authorization: Bearer <CIVITAI_API_KEY>` with each request. ' +
@@ -218,6 +235,13 @@ ${rows}
     )
   );
 
+  const canonicalNote =
+    mcpUrl === `${CANONICAL_BASE_URL}/mcp`
+      ? ''
+      : `<p class="muted" style="margin-top:6px;">Hosted (recommended): <code>${escapeHtml(
+          `${CANONICAL_BASE_URL}/mcp`
+        )}</code></p>`;
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -301,9 +325,9 @@ ${rows}
   <header>
     <span class="badge">Model Context Protocol</span>
     <h1>Civitai MCP Server</h1>
-    <p>Give your AI agent direct access to Civitai — browse models and images, write articles
-    and comments, send DMs, upload images, and manage announcements. Point your agent at this URL
-    and it can configure itself.</p>
+    <p>Turn your AI agent into a full Civitai participant: browse models and images, post and
+    publish work, react, review, follow, collect, comment, send DMs, and enter bounties. Point
+    your agent at this URL and it configures itself.</p>
   </header>
 
   <section>
@@ -317,6 +341,7 @@ ${rows}
   <section>
     <h2>Connect your agent</h2>
     <p class="muted">MCP endpoint: <code>${escapeHtml(mcpUrl)}</code> &nbsp;·&nbsp; Transport: Streamable HTTP</p>
+    ${canonicalNote}
     <div class="cards">
       <div class="panel card">
         <h3>Claude Code</h3>

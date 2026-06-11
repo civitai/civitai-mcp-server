@@ -76,6 +76,25 @@ describe('resolveBaseUrl', () => {
   it('falls back to localhost when no host at all', () => {
     expect(resolveBaseUrl({})).toBe('http://localhost');
   });
+
+  it('lets PUBLIC_BASE_URL override the request-derived URL', () => {
+    expect(
+      resolveBaseUrl(
+        { forwardedProto: 'http', forwardedHost: 'internal:3100', host: 'internal:3100' },
+        'https://mcp.civitai.com'
+      )
+    ).toBe('https://mcp.civitai.com');
+  });
+
+  it('strips a trailing slash from the override', () => {
+    expect(resolveBaseUrl({ host: 'localhost:3100' }, 'https://mcp.civitai.com/')).toBe(
+      'https://mcp.civitai.com'
+    );
+  });
+
+  it('ignores an empty/undefined override (keeps Host derivation)', () => {
+    expect(resolveBaseUrl({ host: 'localhost:3100' }, undefined)).toBe('http://localhost:3100');
+  });
 });
 
 describe('renderLlmsTxt', () => {

@@ -33,6 +33,20 @@ describe('parseConfig', () => {
   it('rejects a non-url apiUrl', () => {
     expect(() => parseConfig({ CIVITAI_API_URL: 'not a url' })).toThrow();
   });
+
+  it('leaves publicBaseUrl unset by default', () => {
+    expect(parseConfig({}).publicBaseUrl).toBeUndefined();
+  });
+
+  it('parses PUBLIC_BASE_URL and strips a trailing slash', () => {
+    expect(parseConfig({ PUBLIC_BASE_URL: 'https://mcp.civitai.com/' }).publicBaseUrl).toBe(
+      'https://mcp.civitai.com'
+    );
+  });
+
+  it('rejects a non-url PUBLIC_BASE_URL', () => {
+    expect(() => parseConfig({ PUBLIC_BASE_URL: 'not a url' })).toThrow();
+  });
 });
 
 describe('bearerFromHeader', () => {

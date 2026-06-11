@@ -1,24 +1,100 @@
 # Civitai MCP Server
 
-A standalone [Model Context Protocol](https://modelcontextprotocol.io) server that
-exposes Civitai's public REST (`/api/v1`) and authenticated tRPC (`/api/trpc`)
-APIs as MCP tools: browsing models/images/creators, writing and publishing
-articles, managing comments, sending DMs, uploading images, and managing site
-announcements and changelog entries.
+Turn your AI agent into a full Civitai participant.
 
-It supersedes two Claude skills (`civitai-browse`, `civitai-user`), porting their
-hard-won API knowledge (AIR URN mapping, the Meilisearch query+type bug
-workaround, superjson `meta.values` date hints, the article publish-rebuild flow,
-comment reply-as-comment-entity chaining, two-step image upload).
+A [Model Context Protocol](https://modelcontextprotocol.io) server that gives AI
+agents first-class access to Civitai: browse models, images, and creators; post
+and publish work; react, review, follow, and collect; write articles and
+comments; send and reply to direct messages; create and enter bounties; and
+(for moderators) manage site announcements and the changelog. 53 tools, exposed
+over Streamable HTTP or stdio.
 
-Built for in-cluster deployment next to the Civitai app — the API destination is
+![License](https://img.shields.io/badge/license-Apache--2.0-blue)
+![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
+![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP%20%7C%20stdio-7c3aed)
+
+There are two ways to use it:
+
+1. **Hosted (recommended)** — point your MCP client at `https://mcp.civitai.com/mcp`. Zero install.
+2. **Self-host** — run it yourself with pnpm, Docker, or in Kubernetes.
+
+---
+
+## Quick start — hosted (recommended)
+
+The easiest path: add the hosted endpoint to your MCP client and supply your own
+Civitai API key. Nothing to install or run.
+
+- **MCP endpoint:** `https://mcp.civitai.com/mcp`
+- **Transport:** Streamable HTTP
+- **Auth:** send `Authorization: Bearer <YOUR_CIVITAI_API_KEY>` with each request
+
+Browse / read tools (search models, images, creators, etc.) work **without** a
+key. Everything that writes (posting, reacting, commenting, DMs, bounties, ...)
+needs one. Grab a key at [civitai.com/user/account](https://civitai.com/user/account).
+
+### Claude Code (CLI)
+
+```bash
+claude mcp add --transport http civitai https://mcp.civitai.com/mcp \
+  --header "Authorization: Bearer YOUR_CIVITAI_API_KEY"
+```
+
+### Claude Desktop / claude.ai (custom connector)
+
+Settings → Connectors → **Add custom connector**. Choose a remote MCP / HTTP
+connector and use:
+
+```
+URL:  https://mcp.civitai.com/mcp
+Auth: Bearer YOUR_CIVITAI_API_KEY
+```
+
+### Cursor (`~/.cursor/mcp.json`)
+
+```json
+{
+  "mcpServers": {
+    "civitai": {
+      "url": "https://mcp.civitai.com/mcp",
+      "headers": { "Authorization": "Bearer YOUR_CIVITAI_API_KEY" }
+    }
+  }
+}
+```
+
+### Generic `.mcp.json` (any client)
+
+```json
+{
+  "mcpServers": {
+    "civitai": {
+      "type": "http",
+      "url": "https://mcp.civitai.com/mcp",
+      "headers": { "Authorization": "Bearer YOUR_CIVITAI_API_KEY" }
+    }
+  }
+}
+```
+
+> **Tip:** hand your agent `https://mcp.civitai.com/llms.txt` (or just
+> `https://mcp.civitai.com/`) and it can read everything it needs - endpoint,
+> transport, auth, and the full tool catalog - to configure itself. See
+> [The `/llms.txt` trick](#the-llmstxt-trick).
+
+---
+
+## Self-host
+
+Prefer to run your own instance (private deployment, in-cluster next to the
+Civitai app, or local dev)? All three paths below work. The API destination is
 fully overridable via `CIVITAI_API_URL`.
 
-## Quick start
+### pnpm
 
 ```bash
 pnpm install
-cp .env.example .env   # set CIVITAI_API_KEY for authenticated tools
+cp .env.example .env   # set CIVITAI_API_KEY for authenticated tools (optional)
 pnpm build
 pnpm start             # HTTP mode on :3100, GET /healthz, POST /mcp
 ```
@@ -29,7 +105,51 @@ For local development with hot reload:
 pnpm dev
 ```
 
-## Environment variables
+### Docker
+
+Prebuilt images are published to GHCR:
+
+```bash
+docker run --rm -p 3100:3100 \
+  -e CIVITAI_API_KEY=YOUR_CIVITAI_API_KEY \
+  ghcr.io/civitai/civitai-mcp-server:latest
+curl localhost:3100/healthz
+```
+
+Or build locally:
+
+```bash
+docker build -t civitai-mcp-server .
+docker run --rm -p 3100:3100 -e CIVITAI_API_KEY=YOUR_CIVITAI_API_KEY civitai-mcp-server
+```
+
+Multi-stage build on `node:20-alpine`, runs as the non-root `node` user, with a
+`HEALTHCHECK` hitting `/healthz`.
+
+### Kubernetes
+
+See [`k8s/deployment.example.yaml`](k8s/deployment.example.yaml): Deployment +
+Service, `CIVITAI_API_KEY` from a Secret, `CIVITAI_API_URL` pointed at the
+in-cluster Civitai service, readiness/liveness probes on `/healthz`.
+
+### Local stdio (for agents that spawn a process)
+
+```json
+{
+  "mcpServers": {
+    "civitai": {
+      "command": "node",
+      "args": ["/path/to/civitai-mcp-server/dist/index.js"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "CIVITAI_API_KEY": "YOUR_CIVITAI_API_KEY"
+      }
+    }
+  }
+}
+```
+
+### Environment variables
 
 | Var | Default | Purpose |
 |---|---|---|
@@ -37,43 +157,31 @@ pnpm dev
 | `CIVITAI_API_KEY` | — | Bearer token for authenticated calls. Optional for browse tools (enhances results); required for user-action tools. In HTTP mode it is the fallback when a request omits an `Authorization` header. |
 | `MCP_TRANSPORT` | `http` | `http` (Streamable HTTP) or `stdio` (local dev / desktop MCP clients). |
 | `PORT` | `3100` | HTTP listen port (http transport only). |
+| `PUBLIC_BASE_URL` | — | Optional canonical public base URL (e.g. `https://mcp.civitai.com`). When set, the advertised MCP endpoint in the landing page / `llms.txt` uses this instead of deriving it from the request `Host` header. Set it on the canonical hosted deployment so it always advertises its public address even behind proxies that don't forward `Host`/`X-Forwarded-*` reliably. Default: unset (Host-derived). |
 | `CIVITAI_USER_ID` | — | Optional: skip the `user.getToken` JWT round-trip for self-id resolution. |
-| `CIVITAI_UPLOAD_MAX_BYTES` | `10485760` | Max bytes accepted for an image fetched/decoded by `upload_image` (10 MB). Guards against memory-exhaustion. |
+| `CIVITAI_UPLOAD_MAX_BYTES` | `10485760` | Max bytes accepted for an image fetched/decoded by `upload_image` (10 MB). Guards against memory exhaustion. |
 | `CIVITAI_UPLOAD_ALLOWED_HOSTS` | — | CSV allowlist of hostnames permitted for URL-based image uploads. When set, only these hosts (and subdomains) may be fetched. Empty = block only internal/private/loopback/metadata targets (default SSRF guard). |
 | `MCP_ALLOWED_HOSTS` | — | CSV of `Host` values allowed by DNS-rebinding protection. When set, protection is enabled and only these hosts may reach `/mcp`. Leave empty in-cluster (behind ingress); set for localhost dev, e.g. `localhost:3100,127.0.0.1:3100`. |
 
-### Per-request auth (multi-tenant)
+#### Per-request auth (multi-tenant)
 
 In HTTP mode, if an incoming MCP request carries `Authorization: Bearer <key>`,
 that key is used for upstream calls instead of `CIVITAI_API_KEY`. The env key is
-the fallback. This lets one in-cluster deployment serve multiple users without a
-per-deployment key. In stdio mode only the env key is used.
+the fallback. This lets one deployment serve multiple users without a
+per-deployment key (this is how the hosted instance works). In stdio mode only
+the env key is used.
 
-## Transports
+---
 
-- **Streamable HTTP** (default, for k8s): `POST /mcp`. Stateless — a fresh server
-  and transport are created per request (`sessionIdGenerator: undefined`,
-  `enableJsonResponse: true`), so it scales horizontally. `GET /healthz` is a plain
-  200 with no upstream calls (used by readiness/liveness probes).
-- **stdio**: set `MCP_TRANSPORT=stdio`. stdout is reserved for the protocol; logs
-  go to stderr.
+## Tool catalog (53 tools)
 
-### HTTP endpoints
-
-| Method & path | Purpose |
-|---|---|
-| `POST /mcp` | MCP Streamable HTTP endpoint (JSON-RPC). |
-| `GET /healthz` | Plain 200 liveness/readiness probe (no upstream calls). |
-| `GET /` | Dual-audience index. Content-negotiates on `User-Agent`: a browser (UA contains `Mozilla/`) gets a self-contained HTML landing page; everything else (curl, fetch, agents, missing UA) gets the `llms.txt` content as `text/plain`. |
-| `GET /llms.txt` | The [llms.txt](https://llmstxt.org)-style agent self-setup guide as `text/plain` — what the server is, the MCP endpoint URL, transport, auth, connect snippets, and the full tool catalog. Share this URL with your agent and it can configure itself. |
-
-The MCP endpoint URL advertised by `/` and `/llms.txt` is derived from the
-request `Host` header, honoring `X-Forwarded-Proto` / `X-Forwarded-Host` so it is
-correct behind a k8s ingress. The tool catalog rendered into both the landing
-page and `llms.txt` is generated from the actual registered tools (single source
-of truth — no hand-duplicated lists).
-
-## Tool catalog (52 tools)
+Every tool returns both a compact human-readable text block and a
+`structuredContent` JSON payload. Read-only tools are marked `readOnlyHint: true`;
+destructive ones `destructiveHint: true`. Errors are normalized to
+`{ ok: false, error, details? }` with `isError: true` (tools never throw raw;
+tRPC `zodError` validation details are surfaced). The catalog below is the single
+source of truth from the live tool registry - the landing page and `llms.txt`
+render the same list.
 
 ### Browse (no auth required)
 | Tool | Description |
@@ -86,7 +194,7 @@ of truth — no hand-duplicated lists).
 | `search_creators` | Search creators/users. |
 | `list_enums` | List filter enum values (model types, sorts, base models, timeframes). |
 
-### Posts (auth — onboarded, non-muted)
+### Posts (auth - onboarded, non-muted)
 | Tool | Description |
 |---|---|
 | `create_post` | Flagship sharing flow via the composite `post.createWithImages` (ONE atomic call: create + ordered images + optional publish; server handles cleanup). Images by UUID or URL (auto-uploaded); sequential `index`. `publishedAt` returns as a Date. MediaWrite scope. |
@@ -97,10 +205,10 @@ of truth — no hand-duplicated lists).
 ### Engagement (auth)
 | Tool | Description |
 |---|---|
-| `react` | Toggle Like/Dislike/Laugh/Cry/Heart on image/post/article/comment/resourceReview/etc. `reaction.toggle` is fire-and-forget (200 ≠ confirmed). Guarded. |
+| `react` | Toggle Like/Dislike/Laugh/Cry/Heart on image/post/article/comment/resourceReview/etc. `reaction.toggle` is fire-and-forget (200 != confirmed). Guarded. |
 | `upsert_resource_review` | Star rating (1-5) + recommend + Markdown details. `resourceReview.upsert`. Guarded. |
 | `get_my_resource_review` | Read your existing review for a model version. |
-| `toggle_follow_user` | Follow/unfollow (resolves username→id). `user.toggleFollow`. Verified. |
+| `toggle_follow_user` | Follow/unfollow (resolves username to id). `user.toggleFollow`. Verified. |
 | `toggle_favorite_model` | Favorite/bookmark a model (explicit `setTo`). `user.toggleFavorite`. |
 | `notify_model` | Toggle new-version notifications. `user.toggleNotifyModel`. |
 | `toggle_bookmark_article` | Bookmark/un-bookmark an article. `user.toggleBookmarkedArticle`. Verified. |
@@ -109,8 +217,8 @@ of truth — no hand-duplicated lists).
 ### Articles (auth)
 | Tool | Description |
 |---|---|
-| `upsert_article` | Create/update. Markdown→HTML. Cover by UUID or URL (auto-uploaded). |
-| `publish_article` | getById→rebuild→upsert with the `publishedAt: ['Date']` hint. Idempotent. |
+| `upsert_article` | Create/update. Markdown to HTML. Cover by UUID or URL (auto-uploaded). |
+| `publish_article` | getById to rebuild to upsert with the `publishedAt: ['Date']` hint. Idempotent. |
 | `unpublish_article` | Dedicated `article.unpublish`. |
 | `get_article` | Fetch by ID. |
 
@@ -119,11 +227,11 @@ of truth — no hand-duplicated lists).
 |---|---|
 | `list_comments` | Recursive thread fetch with per-comment reaction aggregation. |
 | `get_comment` | Single comment, uncapped body. |
-| `post_comment` | Post or reply (reply via `parentCommentId` → comment-entity chaining). |
+| `post_comment` | Post or reply (reply via `parentCommentId` to comment-entity chaining). |
 | `edit_comment` / `delete_comment` / `react_to_comment` | Edit, delete, toggle reaction. |
 | `pin_comment` / `lock_thread` | Moderator-gated upstream. |
 
-### Collections (auth — flag-gated `collections`)
+### Collections (auth - flag-gated `collections`)
 | Tool | Description |
 |---|---|
 | `upsert_collection` | Create/update a collection. `collection.upsert`. Guarded. |
@@ -140,29 +248,24 @@ of truth — no hand-duplicated lists).
 ### Messaging (auth)
 | Tool | Description |
 |---|---|
-| `send_direct_message` | Lookup → `chat.createChat` → `chat.createMessage`. Markdown. Starts a NEW chat. |
+| `send_direct_message` | Lookup to `chat.createChat` to `chat.createMessage`. Markdown. Starts a NEW chat. |
 
-### Chat (auth) — read & reply to existing threads
+### Chat (auth) - read & reply to existing threads
 | Tool | Description |
 |---|---|
 | `list_chats` | List your conversations + participants. |
 | `get_chat_messages` | Read a chat's messages (paginated, `nextCursor`). |
-| `reply_to_chat` | Send into an existing chat (`chat.createMessage`, Markdown, ≤2000 chars). |
+| `reply_to_chat` | Send into an existing chat (`chat.createMessage`, Markdown, <=2000 chars). |
 | `mark_chat_read` | Mark ONE chat read via `chat.markChatRead { chatId }` (advances `lastViewedMessageId`). |
 | `mark_all_chats_read` | Blanket clear of every conversation via `chat.markAllAsRead`. |
 
-### Bounties (auth — flag-gated `bounties`)
+### Bounties (auth - flag-gated `bounties`)
 | Tool | Description |
 |---|---|
-| `create_bounty` | Create via `bounty.create` (NOT `bounty.upsert` — blocked for API keys). `startsAt`/`expiresAt` Date hints; ≥1 example image (UUID or URL). |
+| `create_bounty` | Create via `bounty.create` (NOT `bounty.upsert` - blocked for API keys). `startsAt`/`expiresAt` Date hints; >=1 example image (UUID or URL). |
 | `update_bounty` | Update a bounty you own. `bounty.update`. |
-| `create_bounty_entry` | Submit an entry via the composite `bountyEntry.submit` (≥1 pre-uploaded file ref `{url,name,sizeKB}` + ≥1 image UUID/URL). BountiesWrite scope. |
+| `create_bounty_entry` | Submit an entry via the composite `bountyEntry.submit` (>=1 pre-uploaded file ref `{url,name,sizeKB}` + >=1 image UUID/URL). BountiesWrite scope. |
 | `award_bounty` | Award a bounty to an entry. `bountyEntry.award { id }`. |
-
-### Images (auth)
-| Tool | Description |
-|---|---|
-| `upload_image` | URL or base64 → presign → PUT → UUID (+ probed dimensions). |
 
 ### Announcements (auth, moderator)
 | Tool | Description |
@@ -174,18 +277,93 @@ of truth — no hand-duplicated lists).
 ### Changelog (auth, moderator + `changelogEdit` flag)
 | Tool | Description |
 |---|---|
-| `upsert_changelog` | Create/update. Markdown→HTML; `effectiveAt: ['Date']` hint. |
+| `upsert_changelog` | Create/update. Markdown to HTML; `effectiveAt: ['Date']` hint. |
+
+### Images (auth)
+| Tool | Description |
+|---|---|
+| `upload_image` | URL or base64 to presign to PUT to UUID (+ probed dimensions). |
 
 ### Utility
 | Tool | Description |
 |---|---|
 | `whoami` | Resolve the current user (id, username) and authoritative status via `user.getSelfStatus`: real `isOnboarded` + `completedSteps`, `muted`, `isModerator`, subscription `tier`. Good deploy smoke test. |
 
-Every tool returns both a compact human-readable text block and a
-`structuredContent` JSON payload. Read-only tools are marked
-`readOnlyHint: true`; destructive ones `destructiveHint: true`. Errors are
-normalized to `{ ok: false, error, details? }` with `isError: true` (tools never
-throw raw; tRPC `zodError` validation details are surfaced).
+---
+
+## Auth & scopes
+
+- **API key:** create one at [civitai.com/user/account](https://civitai.com/user/account)
+  and send it as `Authorization: Bearer <key>`. In HTTP mode the per-request
+  header overrides any `CIVITAI_API_KEY` env fallback.
+- **Browse without a key:** all `search_*` / `get_*` browse tools work
+  unauthenticated (a key just enriches results).
+- **Onboarded, non-muted account:** most write actions are `verified` (requires
+  onboarding) or `guarded` (also blocks muted users). A fresh agent account must
+  finish onboarding first - use `complete_onboarding_step`. `whoami` reports the
+  current onboarding/muted/moderator state.
+- **Scoped tokens:** if you use a scoped token (rather than a Full key), it must
+  carry the write scope a tool needs (e.g. `MediaWrite`, `SocialWrite`,
+  `BountiesWrite`, `CollectionsWrite`). A Full key passes everything.
+- **API-key-blocked actions:** a few site actions are intentionally unavailable
+  to API keys (e.g. tipping buzz) and are not shipped as tools.
+
+---
+
+## The `/llms.txt` trick
+
+The server exposes an [llms.txt](https://llmstxt.org)-style self-setup guide.
+Hand your agent the URL and it can configure itself - it reads the MCP endpoint,
+transport, auth instructions, and the full tool catalog with no human in the
+loop:
+
+```
+https://mcp.civitai.com/llms.txt
+```
+
+`https://mcp.civitai.com/` content-negotiates on `User-Agent`: a browser gets a
+self-contained HTML landing page; anything else (curl, fetch, agents, missing UA)
+gets the `llms.txt` text. The advertised endpoint is derived from the request
+`Host` header (honoring `X-Forwarded-Proto`/`-Host`), or pinned via
+`PUBLIC_BASE_URL`, so it is always correct for the deployment serving it.
+
+---
+
+## Transports
+
+- **Streamable HTTP** (default): `POST /mcp`. Stateless - a fresh server and
+  transport are created per request (`sessionIdGenerator: undefined`,
+  `enableJsonResponse: true`), so it scales horizontally. `GET /healthz` is a
+  plain 200 with no upstream calls (used by readiness/liveness probes).
+- **stdio**: set `MCP_TRANSPORT=stdio`. stdout is reserved for the protocol;
+  logs go to stderr.
+
+### HTTP endpoints
+
+| Method & path | Purpose |
+|---|---|
+| `POST /mcp` | MCP Streamable HTTP endpoint (JSON-RPC). |
+| `GET /healthz` | Plain 200 liveness/readiness probe (no upstream calls). |
+| `GET /` | Dual-audience index: browser UA gets HTML; everything else gets `llms.txt` as `text/plain`. |
+| `GET /llms.txt` | The agent self-setup guide as `text/plain`. |
+
+---
+
+## Security
+
+- **SSRF guard:** `upload_image` fetches user-supplied URLs through a guard that
+  blocks internal/private/loopback/metadata targets by default, with an optional
+  `CIVITAI_UPLOAD_ALLOWED_HOSTS` allowlist.
+- **Size cap:** fetched/decoded images are capped at
+  `CIVITAI_UPLOAD_MAX_BYTES` (10 MB default) to prevent memory exhaustion.
+- **DNS-rebinding protection:** enable `MCP_ALLOWED_HOSTS` to validate the
+  incoming `Host` header against an allowlist.
+- **Request body cap:** the HTTP layer caps request bodies (25 MB) and returns
+  JSON-RPC parse errors for malformed input.
+- **Container hardening:** non-root user, read-only root filesystem, dropped
+  capabilities in the example k8s manifest.
+
+---
 
 ## Local dev with the MCP Inspector
 
@@ -196,66 +374,22 @@ pnpm inspector   # runs: npx @modelcontextprotocol/inspector tsx src/index.ts
 This launches the Inspector against the stdio transport. Set `CIVITAI_API_KEY`
 in your environment first if you want to exercise the authenticated tools.
 
-## Claude Code `.mcp.json`
-
-stdio (recommended for local agents):
-
-```json
-{
-  "mcpServers": {
-    "civitai": {
-      "command": "node",
-      "args": ["C:/path/to/civitai-mcp-server/dist/index.js"],
-      "env": {
-        "MCP_TRANSPORT": "stdio",
-        "CIVITAI_API_KEY": "your_key_here"
-      }
-    }
-  }
-}
-```
-
-HTTP (pointing at a running server):
-
-```json
-{
-  "mcpServers": {
-    "civitai": {
-      "type": "http",
-      "url": "http://localhost:3100/mcp",
-      "headers": { "Authorization": "Bearer your_key_here" }
-    }
-  }
-}
-```
-
-## Docker
-
-```bash
-docker build -t civitai-mcp-server .
-docker run --rm -p 3100:3100 -e CIVITAI_API_KEY=your_key civitai-mcp-server
-curl localhost:3100/healthz
-```
-
-Multi-stage build on `node:20-alpine`, runs as the non-root `node` user, with a
-`HEALTHCHECK` hitting `/healthz`.
-
-## Kubernetes
-
-See [`k8s/deployment.example.yaml`](k8s/deployment.example.yaml): Deployment +
-Service, `CIVITAI_API_KEY` from a Secret, `CIVITAI_API_URL` pointed at the
-in-cluster Civitai service, readiness/liveness probes on `/healthz`.
-
 ## Development
 
 ```bash
 pnpm typecheck   # strict tsc, no emit
-pnpm test        # vitest (no network — fetch is mocked)
-pnpm build       # tsc -> dist
+pnpm test        # vitest (no network - fetch is mocked)
+pnpm build       # tsc to dist
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution flow.
 
 ## Non-goals
 
-- No generation tools (use civitai-gen).
-- No moderation actions (use the mod-actions tooling).
+- No generation tools (generation lives elsewhere).
+- No moderation actions.
 - No model file downloads.
+
+## License
+
+[Apache-2.0](LICENSE).

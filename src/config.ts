@@ -37,6 +37,19 @@ const ConfigSchema = z.object({
   uploadAllowedHosts: z.array(z.string()).optional(),
   /** Optional allowlist of Host headers for MCP DNS-rebinding protection. */
   mcpAllowedHosts: z.array(z.string()).optional(),
+  /**
+   * Optional canonical public base URL (e.g. https://mcp.civitai.com). When set,
+   * the advertised MCP endpoint / llms.txt / landing-page URLs use this instead
+   * of deriving the origin from the request Host header. Useful when the server
+   * sits behind a proxy that does not forward Host/X-Forwarded-* reliably, so the
+   * hosted deployment always advertises its canonical address. Default: unset
+   * (keep the Host-derivation behavior).
+   */
+  publicBaseUrl: z
+    .string()
+    .url()
+    .optional()
+    .transform((u) => (u ? u.replace(/\/+$/, '') : u)),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -55,6 +68,7 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     uploadMaxBytes: env.CIVITAI_UPLOAD_MAX_BYTES,
     uploadAllowedHosts: csvList(env.CIVITAI_UPLOAD_ALLOWED_HOSTS),
     mcpAllowedHosts: csvList(env.MCP_ALLOWED_HOSTS),
+    publicBaseUrl: env.PUBLIC_BASE_URL,
   });
 }
 
