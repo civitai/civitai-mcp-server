@@ -193,7 +193,12 @@ export const bountyTools: ToolModule = (reg) => {
         files: z
           .array(
             z.object({
-              url: z.string().describe('File URL/key of the already-uploaded deliverable (required)'),
+              url: z
+                .string()
+                .url()
+                .describe(
+                  'Full URL (https://...) of the already-uploaded deliverable file (required). Must be a fully-qualified URL, not a bare storage key — the server validates it as a URL.'
+                ),
               name: z.string().describe('File name (required)'),
               sizeKB: z.number().describe('File size in KB (required)'),
               id: z.number().int().optional().describe('Existing file id (when editing)'),
