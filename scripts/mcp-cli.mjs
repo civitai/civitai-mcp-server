@@ -41,6 +41,8 @@
  * Requires Node >= 18 (uses the built-in global `fetch`).
  */
 
+import { promises as fs } from 'node:fs';
+
 // The server substitutes this placeholder with its own resolved /mcp endpoint
 // when it serves the script at GET /cli, so a pulled copy defaults to the very
 // server it came from. If the placeholder was NOT substituted (e.g. you copied
@@ -160,12 +162,114 @@ async function listTools(mcpUrl, apiKey) {
   return (env.result && env.result.tools) || [];
 }
 
+/** Call a tool (tools/call) and return its result object ({ content, structuredContent, isError }).
+ *  Throws a clear Error if the tool reported isError (using its text block). */
+async function callTool(mcpUrl, apiKey, name, toolArgs) {
+  const env = await rpc(mcpUrl, apiKey, 'tools/call', { name, arguments: toolArgs });
+  const result = env.result || {};
+  if (result.isError) {
+    const blocks = Array.isArray(result.content) ? result.content : [];
+    const text = blocks
+      .filter((b) => b && b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
+    throw new Error(text || `Tool ${name} reported an error`);
+  }
+  return result;
+}
+
+/** First text content block of a tool result (or ''). */
+function firstText(result) {
+  const blocks = Array.isArray(result.content) ? result.content : [];
+  const b = blocks.find((x) => x && x.type === 'text');
+  return b ? b.text : '';
+}
+
+/** Map a file extension to an image MIME type for the upload content-type. */
+export function contentTypeForFile(filePath) {
+  const m = /\.([A-Za-z0-9]+)$/.exec(filePath);
+  const ext = m ? m[1].toLowerCase() : '';
+  switch (ext) {
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'webp':
+      return 'image/webp';
+    case 'gif':
+      return 'image/gif';
+    case 'avif':
+      return 'image/avif';
+    default:
+      return undefined; // let the server probe/default
+  }
+}
+
+/** Derive a human-ish default post title from a filename (no dir, no extension). */
+export function defaultTitleFromFile(filePath) {
+  const base = filePath.replace(/\\/g, '/').split('/').pop() || filePath;
+  return base.replace(/\.[A-Za-z0-9]+$/, '') || base;
+}
+
+/**
+ * One-shot: read a LOCAL image file, upload it (base64 in the JSON-RPC BODY —
+ * never argv), then create a post attaching it. Returns the create_post result.
+ *
+ * Exported + parameterized on `rpcImpl` so tests can inject a fake transport and
+ * assert the upload→create_post chaining without a network.
+ *
+ * @param {object} opts
+ * @param {string} opts.mcpUrl
+ * @param {string|undefined} opts.apiKey
+ * @param {Buffer} opts.fileBytes   raw image bytes
+ * @param {string} opts.fileName    original filename (for title + content-type)
+ * @param {string} [opts.title]
+ * @param {string} [opts.detail]
+ * @param {number} [opts.nsfwLevel]
+ * @param {boolean} [opts.publish]   default true
+ * @param {(name: string, args: any) => Promise<any>} opts.callToolImpl
+ * @returns {Promise<{post: any, uuid: string}>}
+ */
+export async function postImageFlow(opts) {
+  const { fileBytes, fileName, title, detail, nsfwLevel, publish = true, callToolImpl } = opts;
+
+  // 1. upload_image with base64 in the request BODY (no argv length limit).
+  const uploadArgs = { data: fileBytes.toString('base64') };
+  const ct = contentTypeForFile(fileName);
+  if (ct) uploadArgs.contentType = ct;
+  const uploadResult = await callToolImpl('upload_image', uploadArgs);
+
+  // Prefer the reliable structuredContent.uuid; else parse the bare-UUID lead line.
+  let uuid =
+    uploadResult.structuredContent && uploadResult.structuredContent.uuid
+      ? String(uploadResult.structuredContent.uuid)
+      : '';
+  if (!uuid) {
+    const lead = firstText(uploadResult).split(/\r?\n/)[0].trim();
+    uuid = lead;
+  }
+  if (!uuid) throw new Error('upload_image did not return a UUID');
+
+  // 2. create_post attaching the uploaded image.
+  const postArgs = {
+    images: [{ uuid }],
+    publish,
+  };
+  if (title) postArgs.title = title;
+  if (detail) postArgs.detail = detail;
+  if (nsfwLevel !== undefined) postArgs.nsfwLevel = nsfwLevel;
+  const post = await callToolImpl('create_post', postArgs);
+  return { post, uuid };
+}
+
 const USAGE = `Civitai MCP CLI — drive the Civitai MCP server from the shell (no MCP client needed).
 
 Usage:
   node mcp-cli.mjs list [--json]
   node mcp-cli.mjs call <toolName> [jsonArgs] [--json]
   node mcp-cli.mjs schema <toolName>
+  node mcp-cli.mjs post-image <file> [--title "..."] [--detail "..."] [--nsfw <level>] [--draft] [--json]
   node mcp-cli.mjs --help
 
 Commands:
@@ -173,6 +277,14 @@ Commands:
   call <tool> [json]   Call a tool. jsonArgs is a JSON object of arguments,
                        e.g.  call search_models '{"query":"anime","type":"Checkpoint"}'
   schema <tool>        Print a tool's JSON input schema.
+  post-image <file>    Post a LOCAL image file in one call. Reads <file> from
+                       disk, uploads it (base64 in the request body — no fragile
+                       remote URL, no argv length limit), then creates a post and
+                       publishes it. Prints the public post URL + id.
+                         e.g.  post-image step_0-0.png --title "My render"
+                       Flags: --title, --detail, --nsfw <level>, --draft (leave
+                       unpublished), --json (raw result). Title defaults to the
+                       filename when omitted.
 
 Options:
   --json               Print raw JSON (full result incl. structuredContent).
@@ -269,6 +381,75 @@ async function main() {
     }
     // Non-zero exit when the tool reported an error (e.g. "set CIVITAI_API_KEY").
     return result.isError ? 1 : 0;
+  }
+
+  if (command === 'post-image') {
+    const file = args.shift();
+    if (!file) {
+      process.stderr.write('post-image: missing <file>\n');
+      return 2;
+    }
+    const title = takeFlagValue(args, '--title');
+    const detail = takeFlagValue(args, '--detail');
+    const nsfwRaw = takeFlagValue(args, '--nsfw');
+    const draft = hasFlag(args, '--draft');
+
+    let nsfwLevel;
+    if (nsfwRaw !== undefined) {
+      nsfwLevel = Number(nsfwRaw);
+      if (!Number.isFinite(nsfwLevel)) {
+        process.stderr.write(`post-image: --nsfw must be a number, got "${nsfwRaw}"\n`);
+        return 2;
+      }
+    }
+
+    let fileBytes;
+    try {
+      fileBytes = await fs.readFile(file);
+    } catch (err) {
+      process.stderr.write(
+        `post-image: cannot read file "${file}": ${err instanceof Error ? err.message : String(err)}\n`
+      );
+      return 1;
+    }
+
+    if (!apiKey) {
+      process.stderr.write(
+        'post-image: CIVITAI_API_KEY is required to upload and post. Get one at https://civitai.com/user/account\n'
+      );
+      return 1;
+    }
+
+    const { post } = await postImageFlow({
+      mcpUrl,
+      apiKey,
+      fileBytes,
+      fileName: file,
+      title: title ?? defaultTitleFromFile(file),
+      detail,
+      nsfwLevel,
+      publish: !draft,
+      callToolImpl: (name, toolArgs) => callTool(mcpUrl, apiKey, name, toolArgs),
+    });
+
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify(post, null, 2)}\n`);
+      return 0;
+    }
+    const sc = post.structuredContent || {};
+    const url = sc.url;
+    const id = sc.id;
+    if (url || id) {
+      process.stdout.write(
+        `${draft ? 'Post created (draft).' : 'Post published.'}\n` +
+          (id ? `ID: ${id}\n` : '') +
+          (url ? `URL: ${url}\n` : '')
+      );
+    } else {
+      // Fall back to the tool's own text block.
+      process.stdout.write(`${firstText(post)}\n`);
+    }
+    return 0;
   }
 
   process.stderr.write(`Unknown command "${command}".\n\n${USAGE}\n`);

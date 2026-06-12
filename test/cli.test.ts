@@ -5,7 +5,12 @@ import { createApp } from '../src/index.js';
 import { parseConfig } from '../src/config.js';
 // The pullable CLI is a standalone .mjs; it exports a pure parse helper we can
 // unit-test without a network (and importing it must NOT trigger main()).
-import { parseRpcResponse } from '../scripts/mcp-cli.mjs';
+import {
+  parseRpcResponse,
+  postImageFlow,
+  contentTypeForFile,
+  defaultTitleFromFile,
+} from '../scripts/mcp-cli.mjs';
 
 // ---------------------------------------------------------------------------
 // Unit: response parser handles both JSON and SSE (text/event-stream) shapes.
@@ -39,6 +44,111 @@ describe('parseRpcResponse', () => {
 
   it('throws on an event-stream with no data: payload', () => {
     expect(() => parseRpcResponse('text/event-stream', 'event: ping\n\n')).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit: post-image helpers + the upload→create_post chaining.
+// ---------------------------------------------------------------------------
+
+describe('contentTypeForFile', () => {
+  it('maps common image extensions', () => {
+    expect(contentTypeForFile('step_0-0.png')).toBe('image/png');
+    expect(contentTypeForFile('a.JPG')).toBe('image/jpeg');
+    expect(contentTypeForFile('a.jpeg')).toBe('image/jpeg');
+    expect(contentTypeForFile('a.webp')).toBe('image/webp');
+    expect(contentTypeForFile('a.gif')).toBe('image/gif');
+  });
+  it('returns undefined for unknown extensions (server probes)', () => {
+    expect(contentTypeForFile('a.bin')).toBeUndefined();
+    expect(contentTypeForFile('noext')).toBeUndefined();
+  });
+});
+
+describe('defaultTitleFromFile', () => {
+  it('strips directories and extension', () => {
+    expect(defaultTitleFromFile('out/step_0-0.png')).toBe('step_0-0');
+    expect(defaultTitleFromFile('C:\\renders\\foo.jpeg')).toBe('foo');
+    expect(defaultTitleFromFile('bare')).toBe('bare');
+  });
+});
+
+describe('postImageFlow', () => {
+  it('uploads base64 in the body, then creates a published post with the returned uuid', async () => {
+    const calls: Array<{ name: string; args: any }> = [];
+    const callToolImpl = async (name: string, args: any) => {
+      calls.push({ name, args });
+      if (name === 'upload_image') {
+        return {
+          content: [{ type: 'text', text: 'uuid-abc\nUploaded image. UUID: uuid-abc (8x8)' }],
+          structuredContent: { uuid: 'uuid-abc', width: 8, height: 8 },
+        };
+      }
+      // create_post
+      return {
+        content: [{ type: 'text', text: 'Post created and published.\nID: 99\nURL: https://civitai.com/posts/99' }],
+        structuredContent: { ok: true, id: 99, url: 'https://civitai.com/posts/99', published: true },
+      };
+    };
+
+    const fileBytes = Buffer.from('PNGDATA');
+    const { post, uuid } = await postImageFlow({
+      mcpUrl: 'http://x/mcp',
+      apiKey: 'k',
+      fileBytes,
+      fileName: 'step_0-0.png',
+      title: 'My render',
+      publish: true,
+      callToolImpl,
+    });
+
+    // upload_image first, with base64 of the file in the BODY (not argv) + png content-type.
+    expect(calls[0].name).toBe('upload_image');
+    expect(calls[0].args.data).toBe(fileBytes.toString('base64'));
+    expect(calls[0].args.contentType).toBe('image/png');
+
+    // create_post second, attaching the returned uuid, published.
+    expect(calls[1].name).toBe('create_post');
+    expect(calls[1].args.images).toEqual([{ uuid: 'uuid-abc' }]);
+    expect(calls[1].args.publish).toBe(true);
+    expect(calls[1].args.title).toBe('My render');
+
+    expect(uuid).toBe('uuid-abc');
+    expect(post.structuredContent.url).toBe('https://civitai.com/posts/99');
+  });
+
+  it('falls back to the bare-UUID lead line when structuredContent is absent', async () => {
+    const calls: Array<{ name: string; args: any }> = [];
+    const callToolImpl = async (name: string, args: any) => {
+      calls.push({ name, args });
+      if (name === 'upload_image') {
+        return { content: [{ type: 'text', text: 'uuid-xyz\nUploaded image. UUID: uuid-xyz' }] };
+      }
+      return { content: [{ type: 'text', text: 'ok' }], structuredContent: { id: 1, url: 'u' } };
+    };
+    const { uuid } = await postImageFlow({
+      mcpUrl: 'http://x/mcp',
+      apiKey: 'k',
+      fileBytes: Buffer.from('x'),
+      fileName: 'a.png',
+      publish: false,
+      callToolImpl,
+    });
+    expect(uuid).toBe('uuid-xyz');
+    expect(calls[1].args.publish).toBe(false);
+  });
+
+  it('throws when upload returns no uuid', async () => {
+    const callToolImpl = async () => ({ content: [{ type: 'text', text: '' }] });
+    await expect(
+      postImageFlow({
+        mcpUrl: 'http://x/mcp',
+        apiKey: 'k',
+        fileBytes: Buffer.from('x'),
+        fileName: 'a.png',
+        callToolImpl,
+      })
+    ).rejects.toThrow(/UUID/);
   });
 });
 
