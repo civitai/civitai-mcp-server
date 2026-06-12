@@ -114,7 +114,10 @@ function hasFlag(args, name) {
 }
 
 /** POST a JSON-RPC request and return the parsed envelope. Throws a clear,
- *  human-readable Error on network/HTTP failure (status + body snippet). */
+ *  human-readable Error on network/HTTP failure (status + body snippet).
+ *  Retries transient failures (network errors + HTTP 5xx) up to 2 extra times
+ *  with backoff, so a one-off hiccup (e.g. a pod restart) doesn't surface as a
+ *  hard failure. 4xx (auth, bad input) fail fast — retrying won't help. */
 async function rpc(mcpUrl, apiKey, method, params) {
   const headers = {
     'content-type': 'application/json',
@@ -123,20 +126,42 @@ async function rpc(mcpUrl, apiKey, method, params) {
   if (apiKey) headers.authorization = `Bearer ${apiKey}`;
 
   const requestBody = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const MAX_ATTEMPTS = 3;
 
   let res;
-  try {
-    res = await fetch(mcpUrl, { method: 'POST', headers, body: requestBody });
-  } catch (err) {
-    throw new Error(
-      `Network error reaching ${mcpUrl}: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-
-  const text = await res.text();
-  if (!res.ok) {
-    const snippet = text.length > 500 ? `${text.slice(0, 500)}…` : text;
-    throw new Error(`HTTP ${res.status} ${res.statusText} from ${mcpUrl}\n${snippet}`);
+  let text;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      res = await fetch(mcpUrl, { method: 'POST', headers, body: requestBody });
+    } catch (err) {
+      if (attempt < MAX_ATTEMPTS) {
+        await sleep(400 * attempt);
+        continue;
+      }
+      throw new Error(
+        `Network error reaching ${mcpUrl} after ${MAX_ATTEMPTS} attempts: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    text = await res.text();
+    if (!res.ok) {
+      // Transient server errors (5xx) are worth retrying; 4xx are not.
+      if (res.status >= 500 && attempt < MAX_ATTEMPTS) {
+        await sleep(400 * attempt);
+        continue;
+      }
+      const snippet = text.length > 500 ? `${text.slice(0, 500)}…` : text;
+      let hint = '';
+      if (res.status === 401 || res.status === 403) {
+        hint = apiKey
+          ? '\n-> Your CIVITAI_API_KEY was rejected (invalid/expired, or lacks permission for this action).'
+          : '\n-> This action needs a signed-in key. Set CIVITAI_API_KEY (get one at https://civitai.com/user/account) and retry.';
+      } else if (res.status === 429) {
+        hint = '\n-> Rate limited by the server. Wait a few seconds and retry.';
+      }
+      throw new Error(`HTTP ${res.status} ${res.statusText} from ${mcpUrl}${hint}\n${snippet}`);
+    }
+    break;
   }
 
   let envelope;
@@ -466,7 +491,7 @@ if (isEntry) {
   main()
     .then((code) => process.exit(code))
     .catch((err) => {
-      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     });
 }
