@@ -1,4 +1,6 @@
-import { pathToFileURL } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve as resolvePath } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -57,6 +59,35 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+/** Placeholder the served CLI script carries; substituted per-request with the
+ *  resolved MCP endpoint so a pulled copy defaults to the server it came from. */
+const CLI_URL_PLACEHOLDER = '__MCP_URL__';
+
+/**
+ * Read the pullable CLI script (scripts/mcp-cli.mjs) once at startup and cache
+ * it. Tries a few locations so it works both from source (tsx, cwd = repo root)
+ * and from the compiled bundle in the container (dist/index.js with the repo's
+ * `scripts/` copied alongside under WORKDIR /app). Returns null if it can't be
+ * found, in which case GET /cli responds 404 instead of crashing the server.
+ */
+function loadCliScript(): string | null {
+  // dist/index.js -> ../scripts/mcp-cli.mjs (sibling of dist under /app), and
+  // process.cwd()/scripts/mcp-cli.mjs (WORKDIR /app, or the repo root in dev).
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolvePath(here, '..', 'scripts', 'mcp-cli.mjs'),
+    resolvePath(process.cwd(), 'scripts', 'mcp-cli.mjs'),
+  ];
+  for (const path of candidates) {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
 /**
  * Build the configured express app (without starting it). Exported so tests can
  * exercise the HTTP routes (well-known metadata, the OAuth 401 challenge) over a
@@ -73,6 +104,9 @@ export function createApp(config: Config): { app: express.Express; toolCount: nu
     serverVersion: SERVER_VERSION,
     catalog,
   };
+
+  // CLI script source, read once at startup (null if not shippable in this image).
+  const cliScript = loadCliScript();
 
   const app = express();
   app.use(express.json({ limit: '25mb' }));
@@ -101,6 +135,27 @@ export function createApp(config: Config): { app: express.Express; toolCount: nu
     res
       .type('text/plain; charset=utf-8')
       .send(renderLlmsTxt(landingData, baseUrlFromRequest(req, config.publicBaseUrl)));
+  });
+
+  // Pullable command-line client. For runtimes that load the civitai skill but
+  // cannot edit their MCP client config, this serves a zero-dependency Node CLI
+  // they can fetch and run directly:
+  //   curl -fsSL <base>/cli -o mcp-cli.mjs && node mcp-cli.mjs list
+  // The __MCP_URL__ placeholder is substituted per-request with THIS server's
+  // resolved /mcp endpoint, so a pulled copy defaults to the server it came from
+  // (self-hosters get their own URL). 404s gracefully if the script isn't
+  // shippable in this image (shouldn't happen — Dockerfile copies scripts/).
+  app.get('/cli', (req: Request, res: Response) => {
+    if (cliScript === null) {
+      res.status(404).type('text/plain; charset=utf-8').send('CLI script not available.');
+      return;
+    }
+    const mcpUrl = `${baseUrlFromRequest(req, config.publicBaseUrl)}/mcp`;
+    const body = cliScript.split(CLI_URL_PLACEHOLDER).join(mcpUrl);
+    res
+      .type('application/javascript; charset=utf-8')
+      .set('Content-Disposition', 'inline; filename="mcp-cli.mjs"')
+      .send(body);
   });
 
   // Dual-audience index. Content-negotiate on User-Agent:

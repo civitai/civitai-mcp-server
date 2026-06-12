@@ -82,6 +82,23 @@ claude mcp add --transport http civitai https://mcp.civitai.com/mcp \
 > transport, auth, and the full tool catalog - to configure itself. See
 > [The `/llms.txt` trick](#the-llmstxt-trick).
 
+### CLI (no MCP client needed)
+
+Some agent runtimes can load a skill but can't edit their MCP client config (no
+way to add an HTTP MCP server). For those, pull the zero-dependency Node CLI
+(Node >=18) and drive the server straight from the shell - no MCP client config:
+
+```bash
+curl -fsSL https://mcp.civitai.com/cli -o mcp-cli.mjs
+node mcp-cli.mjs list
+node mcp-cli.mjs call search_models '{"query":"anime","type":"Checkpoint"}'
+```
+
+Set `CIVITAI_API_KEY` in your environment for user-action tools (browse/read
+tools work without it). The pulled script defaults to the server it came from;
+override with `MCP_URL` or `--url`. Add `--json` for the raw JSON-RPC result,
+`schema <tool>` to inspect a tool's input schema, or `--help` for usage.
+
 ---
 
 ## Self-host
@@ -388,6 +405,7 @@ gets the `llms.txt` text. The advertised endpoint is derived from the request
 | `GET /healthz` | Plain 200 liveness/readiness probe (no upstream calls). |
 | `GET /` | Dual-audience index: browser UA gets HTML; everything else gets `llms.txt` as `text/plain`. |
 | `GET /llms.txt` | The agent self-setup guide as `text/plain`. |
+| `GET /cli` | The pullable zero-dependency Node CLI (`mcp-cli.mjs`), with this server's `/mcp` endpoint baked in. For runtimes that can't add an MCP server to their config. |
 
 ---
 

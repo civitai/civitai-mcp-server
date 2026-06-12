@@ -154,6 +154,24 @@ export function renderLlmsTxt(data: LandingData, baseUrl: string): string {
   lines.push('}');
   lines.push('```');
   lines.push('');
+  lines.push('### No MCP client? Use the CLI');
+  lines.push('');
+  lines.push(
+    "If your runtime can't add an MCP server to its config, pull a zero-dependency " +
+      'Node CLI (requires Node >=18) and drive the server from the shell:'
+  );
+  lines.push('');
+  lines.push('```bash');
+  lines.push(`curl -fsSL ${baseUrl}/cli -o mcp-cli.mjs`);
+  lines.push('node mcp-cli.mjs list');
+  lines.push('node mcp-cli.mjs call search_models \'{"query":"anime","type":"Checkpoint"}\'');
+  lines.push('```');
+  lines.push('');
+  lines.push(
+    'Set `CIVITAI_API_KEY` in the environment for user-action tools. The pulled ' +
+      `script defaults to this server (${mcpUrl}); override with MCP_URL or --url.`
+  );
+  lines.push('');
   lines.push('## Tools');
   lines.push('');
   for (const group of groups) {
@@ -182,6 +200,7 @@ export function renderLlmsTxt(data: LandingData, baseUrl: string): string {
 export function renderLandingHtml(data: LandingData, baseUrl: string): string {
   const mcpUrl = `${baseUrl}/mcp`;
   const llmsUrl = `${baseUrl}/llms.txt`;
+  const cliUrl = `${baseUrl}/cli`;
   const groups = groupByCategory(data.catalog);
 
   const catalogHtml = groups
@@ -364,6 +383,17 @@ ${rows}
         <h3 style="margin-top:18px;">Cursor / generic HTTP</h3>
         <pre><code>${cursorJson}</code></pre>
       </div>
+    </div>
+    <div class="panel" style="margin-top:16px;">
+      <h3 style="margin-top:0;">No MCP client? Use the CLI</h3>
+      <p class="muted" style="margin-top:0;">For runtimes that can't add an MCP server to
+      their config, pull a zero-dependency Node CLI (Node &ge;18) and drive the server from
+      the shell:</p>
+      <pre><code>${escapeHtml(
+        `curl -fsSL ${cliUrl} -o mcp-cli.mjs\nnode mcp-cli.mjs list\nnode mcp-cli.mjs call search_models '{"query":"anime","type":"Checkpoint"}'`
+      )}</code></pre>
+      <p class="muted" style="margin-bottom:0;">Set <code>CIVITAI_API_KEY</code> for
+      user-action tools. The script defaults to this server.</p>
     </div>
   </section>
 

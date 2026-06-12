@@ -30,6 +30,9 @@ ENV NODE_ENV=production \
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
+# Ship the pullable CLI script (served at GET /cli). dist/index.js resolves it
+# relative to itself (../scripts) and via process.cwd() (/app/scripts).
+COPY scripts ./scripts
 
 # Run as the built-in non-root node user.
 USER node
