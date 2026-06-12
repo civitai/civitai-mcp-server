@@ -31,6 +31,17 @@ function services(): Services {
   return buildServices(parseConfig({ CIVITAI_API_URL: 'https://x.test', CIVITAI_API_KEY: 'k' }));
 }
 
+/** Services with DISTINCT api/web bases, to prove user-facing links use webUrl. */
+function servicesSplitUrls(): Services {
+  return buildServices(
+    parseConfig({
+      CIVITAI_API_URL: 'http://civitai-app.internal:3000',
+      CIVITAI_WEB_URL: 'https://civitai.com',
+      CIVITAI_API_KEY: 'k',
+    })
+  );
+}
+
 /** Parse args through the tool's zod schema (applies defaults/coercion). */
 function parse(schema: ZodRawShape, args: Record<string, unknown>): Record<string, unknown> {
   return z.object(schema).parse(args) as Record<string, unknown>;
@@ -125,6 +136,35 @@ describe('create_post via composite endpoint', () => {
     expect(input).toMatchObject({ tags: ['anime'], modelVersionId: 42, collectionId: 7 });
     // modelVersionId is stamped onto each image too.
     expect((input.images as Array<Record<string, unknown>>)[0]).toMatchObject({ modelVersionId: 42 });
+  });
+});
+
+describe('user-facing post URLs come from webUrl, not the in-cluster apiUrl', () => {
+  function textOf(res: ToolResult): string {
+    return res.content.map((c) => c.text).join('\n');
+  }
+
+  it('create_post returns a public webUrl link even when apiUrl is internal', async () => {
+    const tools = collect(postTools);
+    const { schema, handler } = tools.get('create_post')!;
+    const svc = servicesSplitUrls();
+    stubTrpc(svc, () => ({ id: 77, imageIds: [1], publishedAt: '2026-06-10T00:00:00.000Z' }));
+    const res = await handler(parse(schema, { images: [{ uuid: 'u' }], publish: true }), svc);
+
+    expect(textOf(res)).toContain('https://civitai.com/posts/77');
+    expect(textOf(res)).not.toContain('civitai-app.internal');
+    expect(res.structuredContent).toMatchObject({ url: 'https://civitai.com/posts/77' });
+  });
+
+  it('get_post returns a public webUrl link even when apiUrl is internal', async () => {
+    const tools = collect(postTools);
+    const { schema, handler } = tools.get('get_post')!;
+    const svc = servicesSplitUrls();
+    stubTrpc(svc, () => ({ id: 29151483, title: 'T', publishedAt: '2026-06-10', user: { id: 1, username: 'a' } }));
+    const res = await handler(parse(schema, { id: 29151483 }), svc);
+
+    expect(textOf(res)).toContain('https://civitai.com/posts/29151483');
+    expect(textOf(res)).not.toContain('civitai-app.internal');
   });
 });
 

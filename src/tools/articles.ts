@@ -89,7 +89,7 @@ export const articleTools: ToolModule = (reg) => {
       const id = typeof result === 'number' ? result : result?.id;
       return ok(
         `Article ${args.id ? 'updated' : 'created'} as ${args.status}.` +
-          (id ? `\nID: ${id}\nView: ${services.config.apiUrl}/articles/${id}` : ''),
+          (id ? `\nID: ${id}\nView: ${services.config.webUrl}/articles/${id}` : ''),
         { ok: true, id, status: args.status, coverImageUuid: coverUuid }
       );
     }
@@ -167,7 +167,7 @@ export const articleTools: ToolModule = (reg) => {
         { publishedAt: ['Date'] }
       );
       return ok(
-        `Article ${args.id} published.\nStatus: ${result.status}\nPublished at: ${result.publishedAt}\nURL: ${services.config.apiUrl}/articles/${args.id}`,
+        `Article ${args.id} published.\nStatus: ${result.status}\nPublished at: ${result.publishedAt}\nURL: ${services.config.webUrl}/articles/${args.id}`,
         { ok: true, id: args.id, status: result.status, publishedAt: result.publishedAt }
       );
     }
@@ -216,7 +216,7 @@ export const articleTools: ToolModule = (reg) => {
         `# ${current.title} (ID: ${current.id})`,
         `Status: ${current.status ?? 'Unknown'}  |  Published: ${current.publishedAt ?? 'N/A'}`,
         `Tags: ${(current.tags ?? []).map((t) => t.name).join(', ') || 'none'}`,
-        `URL: ${services.config.apiUrl}/articles/${current.id}`,
+        `URL: ${services.config.webUrl}/articles/${current.id}`,
       ].join('\n');
       return ok(text, {
         id: current.id,

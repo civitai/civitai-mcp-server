@@ -82,7 +82,7 @@ export const browseTools: ToolModule = (reg) => {
           ? 'No models found.' +
             (needsClientFilter ? ' (results returned but none matched the type filter)' : '')
           : `Found ${items.length} model(s):\n\n` +
-            items.map((m, i) => formatModelResult(m, i, config.apiUrl)).join('\n\n');
+            items.map((m, i) => formatModelResult(m, i, config.webUrl)).join('\n\n');
 
       return ok(text, {
         count: items.length,
@@ -112,7 +112,7 @@ export const browseTools: ToolModule = (reg) => {
       const errors: Array<{ id: number; error: string }> = [];
       for (const r of results) {
         if (r.ok) {
-          blocks.push(formatModelDetail(r.value, config.apiUrl));
+          blocks.push(formatModelDetail(r.value, config.webUrl));
           structured.push({ id: r.value.id, name: r.value.name, air: modelAirUrns(r.value) });
         } else {
           errors.push({ id: r.item, error: r.error });
@@ -142,7 +142,7 @@ export const browseTools: ToolModule = (reg) => {
       const blocks: string[] = [];
       const errors: Array<{ id: number; error: string }> = [];
       for (const r of results) {
-        if (r.ok) blocks.push(formatVersionDetail(r.value, config.apiUrl));
+        if (r.ok) blocks.push(formatVersionDetail(r.value, config.webUrl));
         else errors.push({ id: r.item, error: r.error });
       }
       let text = blocks.join('\n\n' + '='.repeat(50) + '\n\n');
@@ -226,7 +226,7 @@ export const browseTools: ToolModule = (reg) => {
       const blocks: string[] = [];
       const errors: Array<{ id: number; error: string }> = [];
       for (const r of results) {
-        if (r.ok) blocks.push(formatImageDetail(r.value, config.apiUrl));
+        if (r.ok) blocks.push(formatImageDetail(r.value, config.webUrl));
         else errors.push({ id: r.item, error: r.error });
       }
       let text = blocks.join('\n\n' + '='.repeat(50) + '\n\n');

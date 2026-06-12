@@ -83,7 +83,7 @@ export const changelogTools: ToolModule = (reg) => {
       return ok(`Changelog ${isUpdate ? 'updated' : 'created'}.${id ? ` ID: ${id}` : ''}`, {
         ok: true,
         id,
-        url: `${services.config.apiUrl}/changelog`,
+        url: `${services.config.webUrl}/changelog`,
       });
     }
   );

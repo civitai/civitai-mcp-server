@@ -173,8 +173,10 @@ export const imageTools: ToolModule = (reg) => {
     async (args, services) => {
       if (!args.url && !args.data) throw new Error('Provide either url or data');
       const result = await uploadImage(services, args);
+      // Lead with the bare UUID so agents can grep it without JSON-parsing the
+      // human text. structuredContent reliably carries { uuid, width, height }.
       return ok(
-        `Uploaded image. UUID: ${result.uuid}` +
+        `${result.uuid}\nUploaded image. UUID: ${result.uuid}` +
           (result.width ? ` (${result.width}x${result.height})` : ''),
         { ...result }
       );

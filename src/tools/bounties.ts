@@ -126,7 +126,7 @@ export const bountyTools: ToolModule = (reg) => {
       const id = res?.id;
       return ok(
         `Bounty created: "${args.name}"${id ? ` (id ${id})` : ''}.` +
-          (id ? `\nURL: ${services.config.apiUrl}/bounties/${id}` : ''),
+          (id ? `\nURL: ${services.config.webUrl}/bounties/${id}` : ''),
         { ok: true, id, name: args.name }
       );
     }

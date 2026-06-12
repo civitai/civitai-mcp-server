@@ -123,7 +123,7 @@ export const postTools: ToolModule = (reg) => {
       if (!res?.id) throw new Error('post.createWithImages did not return an id');
 
       const imageIds = res.imageIds ?? [];
-      const url = `${services.config.apiUrl}/posts/${res.id}`;
+      const url = `${services.config.webUrl}/posts/${res.id}`;
       return ok(
         `Post ${args.publish ? 'created and published' : 'created (draft)'}.\nID: ${res.id}\nImages attached: ${imageIds.length}\nURL: ${url}`,
         {
@@ -154,7 +154,7 @@ export const postTools: ToolModule = (reg) => {
         `Post #${post.id}${post.title ? ` — ${post.title}` : ''}`,
         `By: ${post.user?.username ?? `user#${post.user?.id}`}`,
         `Published: ${post.publishedAt ?? '(draft)'}`,
-        `URL: ${services.config.apiUrl}/posts/${post.id}`,
+        `URL: ${services.config.webUrl}/posts/${post.id}`,
       ].join('\n');
       return ok(text, {
         id: post.id,
@@ -185,7 +185,7 @@ export const postTools: ToolModule = (reg) => {
       const res = await services.trpc.call<PostRow>('post.update', input, 'POST', {
         publishedAt: ['Date'],
       });
-      return ok(`Post ${args.id} published.\nURL: ${services.config.apiUrl}/posts/${args.id}`, {
+      return ok(`Post ${args.id} published.\nURL: ${services.config.webUrl}/posts/${args.id}`, {
         ok: true,
         id: args.id,
         publishedAt: res?.publishedAt ?? input.publishedAt,

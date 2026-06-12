@@ -171,6 +171,7 @@ in-cluster Civitai service, readiness/liveness probes on `/healthz`.
 | Var | Default | Purpose |
 |---|---|---|
 | `CIVITAI_API_URL` | `https://civitai.com` | Base URL for **all** API calls (REST + tRPC). In-cluster override, e.g. `http://civitai-app:3000`. |
+| `CIVITAI_WEB_URL` | `https://civitai.com` | Public website base for user-facing links in tool output (post/model/image/profile URLs). Distinct from `CIVITAI_API_URL`, which may point at an internal cluster service — links handed to users must stay public. The `civitai.com` default is correct for the hosted deployment; only override for `civitai.red` or a self-host on another domain. |
 | `CIVITAI_API_KEY` | — | Bearer token for authenticated calls. Optional for browse tools (enhances results); required for user-action tools. In HTTP mode it is the fallback when a request omits an `Authorization` header. |
 | `MCP_TRANSPORT` | `http` | `http` (Streamable HTTP) or `stdio` (local dev / desktop MCP clients). |
 | `PORT` | `3100` | HTTP listen port (http transport only). |

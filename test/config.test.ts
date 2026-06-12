@@ -16,6 +16,21 @@ describe('parseConfig', () => {
     expect(parseConfig({ CIVITAI_API_URL: 'http://civitai-app:3000/' }).apiUrl).toBe('http://civitai-app:3000');
   });
 
+  it('defaults webUrl to civitai.com independent of apiUrl', () => {
+    // The bug: when apiUrl is an internal cluster service, webUrl must stay public.
+    const c = parseConfig({ CIVITAI_API_URL: 'http://civitai-app:3000' });
+    expect(c.apiUrl).toBe('http://civitai-app:3000');
+    expect(c.webUrl).toBe('https://civitai.com');
+  });
+
+  it('parses CIVITAI_WEB_URL and strips a trailing slash', () => {
+    expect(parseConfig({ CIVITAI_WEB_URL: 'https://civitai.red/' }).webUrl).toBe('https://civitai.red');
+  });
+
+  it('rejects a non-url CIVITAI_WEB_URL', () => {
+    expect(() => parseConfig({ CIVITAI_WEB_URL: 'not a url' })).toThrow();
+  });
+
   it('coerces numeric env vars', () => {
     const c = parseConfig({ PORT: '8080', CIVITAI_USER_ID: '123' });
     expect(c.port).toBe(8080);
