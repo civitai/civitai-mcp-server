@@ -66,7 +66,7 @@ export const notificationTools: ToolModule = (reg) => {
         nextCursor?: string | null;
       }>('notification.getAllByUser', input, 'GET', { cursor: ['Date'] });
 
-      const items = res.items ?? res.notifications ?? [];
+      const items = res?.items ?? res?.notifications ?? [];
       const lines = items.map((n) => {
         const when = n.createdAt ? new Date(n.createdAt).toISOString().slice(0, 16).replace('T', ' ') : '';
         const flag = n.read ? '' : ' [UNREAD]';
@@ -74,8 +74,8 @@ export const notificationTools: ToolModule = (reg) => {
       });
       return ok(
         (lines.join('\n') || 'No notifications.') +
-          (res.nextCursor ? `\n\nMore available — nextCursor: ${res.nextCursor}` : ''),
-        { count: items.length, nextCursor: res.nextCursor ?? null, items }
+          (res?.nextCursor ? `\n\nMore available — nextCursor: ${res?.nextCursor}` : ''),
+        { count: items.length, nextCursor: res?.nextCursor ?? null, items }
       );
     }
   );

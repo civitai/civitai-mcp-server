@@ -10,6 +10,7 @@ import { notificationTools } from '../src/tools/notifications.js';
 import { chatTools } from '../src/tools/chat.js';
 import { bountyTools } from '../src/tools/bounties.js';
 import { whoamiTools } from '../src/tools/whoami.js';
+import { commentTools } from '../src/tools/comments.js';
 
 /**
  * Capture each tool module's handlers via a fake registrar so we can invoke a
@@ -460,5 +461,42 @@ describe('notification categories', () => {
 
     const mark = tools.get('mark_notifications_read')!;
     expect(() => parse(mark.schema, { category: 'Referral' })).not.toThrow();
+  });
+});
+
+describe('list_comments — Civitai returns json:null for empty results', () => {
+  // A comment with zero replies gets `{"result":{"data":{"json":null}}}`, not an
+  // empty list. list_comments recurses into replies for every top-level comment,
+  // so the first childless one used to throw "Cannot read properties of null".
+  it('walks a thread whose comments have no replies', async () => {
+    const tools = collect(commentTools);
+    const svc = services();
+    stubTrpc(svc, (procedure, input) => {
+      if (procedure !== 'commentv2.getInfinite') return null;
+      const i = input as { entityType: string };
+      if (i.entityType === 'comment') return null; // childless reply fetch
+      return {
+        comments: [{ id: 11, content: '<p>top level</p>', user: { id: 1, username: 'alice' } }],
+        nextCursor: null,
+      };
+    });
+
+    const t = tools.get('list_comments')!;
+    const res = await t.handler(parse(t.schema, { entityType: 'image', entityId: 99 }), svc);
+
+    expect(res.isError).not.toBe(true);
+    expect(JSON.stringify(res)).toContain('top level');
+  });
+
+  it('reports not-found instead of throwing when get_comment returns null', async () => {
+    const tools = collect(commentTools);
+    const svc = services();
+    stubTrpc(svc, () => null);
+
+    const t = tools.get('get_comment')!;
+    const res = await t.handler(parse(t.schema, { id: 404 }), svc);
+
+    expect(res.isError).not.toBe(true);
+    expect(JSON.stringify(res)).toContain('No comment found');
   });
 });

@@ -96,7 +96,10 @@ async function fetchAllComments(
       input,
       'GET'
     );
-    const batch = res.comments ?? [];
+    // `res` itself is null when a comment has no replies. The old `?? []` guarded
+    // only the property, so the reply recursion threw on the first childless comment
+    // it reached — which in practice is almost immediately.
+    const batch = res?.comments ?? [];
     for (const c of batch) {
       if (budget.remaining <= 0) {
         budget.truncated = true;
@@ -105,7 +108,7 @@ async function fetchAllComments(
       all.push(c);
       budget.remaining--;
     }
-    const next = res.nextCursor;
+    const next = res?.nextCursor;
     if (next === undefined || next === null || budget.remaining <= 0) {
       return { comments: all, nextCursor: toNumericCursor(next) };
     }
@@ -187,6 +190,7 @@ export const commentTools: ToolModule = (reg) => {
     },
     async (args, services) => {
       const c = await services.trpc.call<CommentRow>('commentv2.getSingle', { id: args.id }, 'GET');
+      if (!c) return ok(`No comment found with id ${args.id}.`, { id: args.id, found: false });
       return ok(formatComment(c, '', 0), { id: c.id, content: stripHtml(c.content) });
     }
   );

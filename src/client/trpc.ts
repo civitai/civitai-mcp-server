@@ -69,13 +69,19 @@ export class TrpcClient {
   /**
    * Call a tRPC procedure. `method` is POST (mutations) or GET (queries).
    * `metaValues` carries optional superjson type hints.
+   *
+   * Returns `T | null`. Civitai answers `{"result":{"data":{"json":null}}}` for an
+   * empty result rather than an empty object — e.g. `commentv2.getInfinite` on a
+   * comment with no replies, or on an entity type it does not serve. Declaring
+   * `Promise<T>` let every call site dereference the result unchecked, which
+   * crashed `list_comments` with "Cannot read properties of null".
    */
   async call<T = unknown>(
     procedure: string,
     input: unknown,
     method: 'GET' | 'POST' = 'POST',
     metaValues?: MetaValues
-  ): Promise<T> {
+  ): Promise<T | null> {
     // `?? null`: JSON.stringify({ json: undefined }) drops the key entirely and
     // emits `{}`, which Civitai's tRPC rejects with "Invalid input". Every
     // no-argument procedure (user.getSelfStatus, user.checkNotifications,

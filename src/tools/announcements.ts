@@ -37,7 +37,7 @@ async function findAnnouncementById(services: Services, id: number): Promise<Ann
       { page, limit },
       'GET'
     );
-    const items = res.items ?? [];
+    const items = res?.items ?? [];
     const hit = items.find((x) => x.id === id);
     if (hit) return hit;
     if (items.length < limit) return null;
@@ -204,13 +204,13 @@ export const announcementTools: ToolModule = (reg) => {
         input,
         'GET'
       );
-      const items = result.items ?? [];
+      const items = result?.items ?? [];
       const text = items.length
         ? items
             .map((a) => `${a.id}\t${a.disabled ? '[disabled]' : '[live]'}\t${a.color ?? '-'}\t${a.title}`)
             .join('\n')
         : 'No announcements.';
-      return ok(text, { count: items.length, totalItems: result.totalItems, announcements: items });
+      return ok(text, { count: items.length, totalItems: result?.totalItems, announcements: items });
     }
   );
 };
