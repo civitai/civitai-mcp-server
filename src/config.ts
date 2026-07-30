@@ -42,7 +42,27 @@ const ConfigSchema = z.object({
     .url()
     .default('https://civitai.com')
     .transform((u) => u.replace(/\/+$/, '')),
-  apiKey: z.string().min(1).optional(),
+  /**
+   * An MCP client configured with `"CIVITAI_API_KEY": "${CIVITAI_API_KEY}"` passes
+   * that string through verbatim when the launching process has no such variable.
+   * `.min(1)` accepted the 18-char literal and it went out as a bearer token, so
+   * every call returned 401 "Please use the public API instead" — which reads as
+   * Civitai blocking third-party tRPC rather than a local misconfiguration.
+   *
+   * Only the placeholder is rejected here. Key *shape* is warned about in
+   * parseConfig instead: a wrong guess at Civitai's key format would refuse to
+   * start with a perfectly valid key, which is worse than the warning.
+   */
+  apiKey: z
+    .string()
+    .min(1)
+    .refine((k) => !/^\$[{(]/.test(k), {
+      message:
+        'CIVITAI_API_KEY is an unexpanded "${CIVITAI_API_KEY}" literal, not a key. The ' +
+        'process that launched this server had no CIVITAI_API_KEY — export it in the ' +
+        'launching shell, or set the value directly in your MCP client config.',
+    })
+    .optional(),
   transport: TransportEnum.default('http'),
   port: z.coerce.number().int().positive().default(3100),
   userId: z.coerce.number().int().positive().optional(),
@@ -104,8 +124,23 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
 let cached: Config | null = null;
 
 /** Lazily parse and cache the process environment config. */
+/** Shape of every Civitai personal API key seen so far. Warn only — never reject. */
+const LIKELY_API_KEY = /^[a-f0-9]{32}$/i;
+
 export function getConfig(): Config {
-  if (!cached) cached = parseConfig(process.env);
+  if (!cached) {
+    cached = parseConfig(process.env);
+    // Startup-only diagnostic, so parseConfig stays pure for tests. A key of an
+    // unexpected shape still works; it just gets a pointer to check here first,
+    // because Civitai's 401 body sends people off to rewrite against /api/v1.
+    const key = cached.apiKey;
+    if (key && !LIKELY_API_KEY.test(key)) {
+      console.error(
+        `civitai-mcp: CIVITAI_API_KEY is ${key.length} chars, expected 32 hex. Continuing — ` +
+          'but if calls return 401 "Please use the public API instead", suspect the key first.'
+      );
+    }
+  }
   return cached;
 }
 
