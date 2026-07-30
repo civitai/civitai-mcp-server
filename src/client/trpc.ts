@@ -76,7 +76,11 @@ export class TrpcClient {
     method: 'GET' | 'POST' = 'POST',
     metaValues?: MetaValues
   ): Promise<T> {
-    const wrapped: { json: unknown; meta?: { values: MetaValues } } = { json: input };
+    // `?? null`: JSON.stringify({ json: undefined }) drops the key entirely and
+    // emits `{}`, which Civitai's tRPC rejects with "Invalid input". Every
+    // no-argument procedure (user.getSelfStatus, user.checkNotifications,
+    // chat.getAllByUser, ...) hit that.
+    const wrapped: { json: unknown; meta?: { values: MetaValues } } = { json: input ?? null };
     if (metaValues && Object.keys(metaValues).length > 0) {
       wrapped.meta = { values: metaValues };
     }
