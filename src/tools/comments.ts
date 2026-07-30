@@ -40,6 +40,30 @@ interface CommentRow {
   user?: { id?: number; username?: string };
 }
 
+/** Structured row returned to clients that read `structuredContent`. */
+interface CommentOut {
+  id: number;
+  username: string | null;
+  createdAt?: string;
+  content: string;
+  reactionCount: number;
+  pinned: boolean;
+  hidden: boolean;
+  depth: number;
+  parentId: number | null;
+}
+
+/** Plain-text body, capped identically to the text rendering (cap 0 = uncapped). */
+function commentBody(c: CommentRow, cap: number): string {
+  const raw = stripHtml(c.content).replace(/\s+/g, ' ');
+  return cap > 0 && raw.length > cap ? raw.slice(0, cap - 3) + '...' : raw;
+}
+
+/** Total reactions, whether upstream sent an aggregate count or the raw list. */
+function reactionTotal(c: CommentRow): number {
+  return c.reactionCount ?? c.reactions?.length ?? 0;
+}
+
 function reactionSummary(c: CommentRow): string {
   const counts: Record<string, number> = {};
   for (const r of c.reactions ?? []) counts[r.reaction] = (counts[r.reaction] ?? 0) + 1;
@@ -53,8 +77,7 @@ function formatComment(c: CommentRow, indent: string, cap = 280): string {
   const when = c.createdAt ? new Date(c.createdAt).toISOString().replace('T', ' ').slice(0, 16) : '';
   const pinned = c.pinnedAt ? ' [PINNED]' : '';
   const hidden = c.hidden ? ' [HIDDEN]' : '';
-  const raw = stripHtml(c.content).replace(/\s+/g, ' ');
-  const body = cap > 0 && raw.length > cap ? raw.slice(0, cap - 3) + '...' : raw;
+  const body = commentBody(c, cap);
   return `${indent}#${c.id} by ${author}${pinned}${hidden} at ${when} ${reactionSummary(c)}\n${indent}  ${body}`.trimEnd();
 }
 
@@ -143,24 +166,45 @@ export const commentTools: ToolModule = (reg) => {
     async (args, services) => {
       const cap = args.includeFull ? 0 : 280;
       const lines: string[] = [];
+      // Collected alongside `lines`: clients that read structuredContent (Claude
+      // Code among them) render it instead of the text block, so returning only
+      // counts there made the tool look like it found nothing.
+      const rows: CommentOut[] = [];
       // Global ceiling shared across the whole recursive walk. Prevents the
       // 100^depth fan-out worst case from exhausting memory / the upstream API.
       const budget = { remaining: MAX_COMMENTS_PER_CALL, truncated: false };
-      const collect = async (et: string, eid: number, d: number, indent: string): Promise<number> => {
+      const collect = async (
+        et: string,
+        eid: number,
+        d: number,
+        indent: string,
+        parentId: number | null
+      ): Promise<number> => {
         const { comments } = await fetchAllComments(services, et, eid, args.limit, args.sort, budget);
         for (const c of comments) {
           lines.push(formatComment(c, indent, cap));
+          rows.push({
+            id: c.id,
+            username: c.user?.username ?? null,
+            createdAt: c.createdAt,
+            content: commentBody(c, cap),
+            reactionCount: reactionTotal(c),
+            pinned: !!c.pinnedAt,
+            hidden: !!c.hidden,
+            depth: d,
+            parentId,
+          });
           if (d < args.depth && budget.remaining > 0) {
             const children = await fetchAllComments(services, 'comment', c.id, args.limit, args.sort, budget);
             if (children.comments.length) {
               lines.push(`${indent}  ↳ ${children.comments.length} repl${children.comments.length === 1 ? 'y' : 'ies'}:`);
-              await collect('comment', c.id, d + 1, indent + '    ');
+              await collect('comment', c.id, d + 1, indent + '    ', c.id);
             }
           }
         }
         return comments.length;
       };
-      const top = await collect(args.entityType, args.entityId, 0, '');
+      const top = await collect(args.entityType, args.entityId, 0, '', null);
       const truncationNote = budget.truncated
         ? `\n\n[results truncated at ${MAX_COMMENTS_PER_CALL} comments — narrow entityId or reduce depth to see more]`
         : '';
@@ -172,7 +216,14 @@ export const commentTools: ToolModule = (reg) => {
           `\n\n(${top} top-level, depth=${args.depth})` +
           truncationNote +
           footer,
-        { topLevelCount: top, truncated: budget.truncated, maxComments: MAX_COMMENTS_PER_CALL }
+        {
+          comments: rows,
+          topLevelCount: top,
+          totalCount: rows.length,
+          truncated: budget.truncated,
+          maxComments: MAX_COMMENTS_PER_CALL,
+          bodyCharLimit: cap || null,
+        }
       );
     }
   );
