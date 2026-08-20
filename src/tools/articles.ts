@@ -167,8 +167,8 @@ export const articleTools: ToolModule = (reg) => {
         { publishedAt: ['Date'] }
       );
       return ok(
-        `Article ${args.id} published.\nStatus: ${result.status}\nPublished at: ${result.publishedAt}\nURL: ${services.config.webUrl}/articles/${args.id}`,
-        { ok: true, id: args.id, status: result.status, publishedAt: result.publishedAt }
+        `Article ${args.id} published.\nStatus: ${result?.status ?? "unknown"}\nPublished at: ${result?.publishedAt ?? "unknown"}\nURL: ${services.config.webUrl}/articles/${args.id}`,
+        { ok: true, id: args.id, status: result?.status, publishedAt: result?.publishedAt }
       );
     }
   );
