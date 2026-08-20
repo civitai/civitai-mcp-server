@@ -3,8 +3,27 @@ import type { ToolModule } from '../server.js';
 import { ok } from './helpers.js';
 import { mdToHtml } from '../lib/markdown.js';
 import { uploadImage } from './images.js';
+import type { MetaValues } from '../client/trpc.js';
 
 const NSFW_MAP: Record<string, number> = { PG: 1, PG13: 2, R: 4, X: 8, XXX: 16, Blocked: 32 };
+
+/**
+ * True when `content` is an HTML document body rather than Markdown.
+ *
+ * mdToHtml escapes every `<`, so an HTML body passed through it renders as
+ * visible tag soup and every <edge-media> image and code block is destroyed.
+ * This is a heuristic guard, not a parser: it only has to catch bodies fetched
+ * from get_article, which always arrive as tag-dense single-line HTML.
+ */
+export function looksLikeHtmlBody(content: string): boolean {
+  const s = content.trim();
+  if (!s.startsWith('<')) return false;
+  // A block-level open tag at the start, plus any closing tag later on.
+  if (!/^<(p|div|h[1-6]|ul|ol|blockquote|pre|hr|edge-media|figure|table|section)\b[^>]*>/i.test(s)) {
+    return false;
+  }
+  return /<\/(p|div|h[1-6]|ul|ol|li|blockquote|pre|strong|em|a)>/i.test(s) || /<edge-media\b/i.test(s);
+}
 
 interface ArticleRow {
   id: number;
@@ -24,6 +43,8 @@ interface ArticleRow {
     type?: string;
   } | null;
   tags?: Array<{ id?: number; name: string }>;
+  attachments?: unknown[];
+  lockedProperties?: string[];
 }
 
 export const articleTools: ToolModule = (reg) => {
@@ -32,17 +53,34 @@ export const articleTools: ToolModule = (reg) => {
     {
       title: 'Create or update article',
       description:
-        'Create (omit id) or update (pass id) a Civitai article. Markdown content is converted to HTML server-side-safe. Optionally attach a cover by UUID (coverImageUuid) or by URL (coverImageUrl, uploaded automatically). Note: article.upsert requires title+content on every call. To flip publish state use publish_article.',
+        'Create (omit id) or update (pass id) a Civitai article. ' +
+        'CONTENT FORMAT: contentFormat="markdown" (default) converts Markdown to HTML; ' +
+        'contentFormat="html" sends your HTML through untouched, which is the only way to write ' +
+        '<edge-media> images, and is required when round-tripping a body fetched from get_article. ' +
+        'UPDATES ARE MERGES: article.upsert overwrites every field it receives and clears every field ' +
+        'it does not, so when id is passed this tool first fetches the article and preserves status, ' +
+        'publishedAt, cover, tags and nsfw level unless you explicitly override them. ' +
+        'Optionally attach a cover by UUID (coverImageUuid) or by URL (coverImageUrl, uploaded automatically).',
       inputSchema: {
         title: z.string().describe('Article title'),
-        content: z.string().describe('Article body in Markdown (converted to HTML)'),
+        content: z.string().describe('Article body (Markdown by default; raw HTML if contentFormat="html")'),
+        contentFormat: z
+          .enum(['markdown', 'html'])
+          .default('markdown')
+          .describe('How to treat `content`. Use "html" to preserve <edge-media>, code blocks and spans.'),
         id: z.number().int().optional().describe('Existing article ID to update'),
-        status: z.enum(['Draft', 'Published']).default('Draft').describe('Draft or Published'),
+        status: z
+          .enum(['Draft', 'Published'])
+          .optional()
+          .describe('Draft or Published. On update, omit to keep the current status. Defaults to Draft on create.'),
         nsfwLevel: z
           .enum(['PG', 'PG13', 'R', 'X', 'XXX', 'Blocked'])
-          .default('PG')
-          .describe('Content rating (userNsfwLevel)'),
-        tags: z.array(z.string()).optional().describe('Tag names (lowercased)'),
+          .optional()
+          .describe('Content rating (userNsfwLevel). On update, omit to keep the current rating.'),
+        tags: z
+          .array(z.string())
+          .optional()
+          .describe('Tag names (lowercased). On update, omit to keep the current tags; pass [] to clear them.'),
         coverImageUuid: z.string().optional().describe('Cover image UUID from upload_image'),
         coverImageUrl: z.string().url().optional().describe('Cover image URL (uploaded automatically)'),
         coverWidth: z.number().int().optional().describe('Cover width (when using a UUID)'),
@@ -52,8 +90,33 @@ export const articleTools: ToolModule = (reg) => {
     },
     async (args, services) => {
       services.auth.requireKey();
-      const html = mdToHtml(args.content);
+
+      // Markdown mode escapes every `<`, so HTML handed to it silently turns into
+      // visible tag soup and images/code blocks are destroyed. Refuse instead.
+      // Anything other than an explicit "html" is markdown: relying on the zod
+      // default would let a caller that skips schema parsing slip past the guard.
+      const asHtml = args.contentFormat === 'html';
+      if (!asHtml && looksLikeHtmlBody(args.content)) {
+        throw new Error(
+          'content looks like HTML but contentFormat is "markdown", which would escape every tag ' +
+            'and render the body as visible tag soup (destroying <edge-media> images and code blocks). ' +
+            'Pass contentFormat: "html" to send it through untouched, or supply real Markdown.'
+        );
+      }
+
+      const html = asHtml ? args.content : mdToHtml(args.content);
       if (!html || html === '<p></p>') throw new Error('Converted HTML content is empty');
+
+      // article.upsert is a full replace, not a patch: any field omitted from the
+      // payload is cleared. On update, start from the live record so an unrelated
+      // edit cannot null the cover, drop the tags or unpublish the article.
+      let current: ArticleRow | null = null;
+      if (args.id) {
+        current = await services.trpc.call<ArticleRow | null>('article.getById', { id: args.id }, 'GET');
+        if (!current) {
+          throw new Error(`Article ${args.id} not found (or not visible to your account)`);
+        }
+      }
 
       let coverUuid = args.coverImageUuid;
       let coverW = args.coverWidth;
@@ -65,32 +128,76 @@ export const articleTools: ToolModule = (reg) => {
         coverH = coverH ?? up.height;
       }
 
+      let coverImage: Record<string, unknown> | null;
+      if (coverUuid) {
+        coverImage = {
+          url: coverUuid,
+          width: coverW ?? 1024,
+          height: coverH ?? 576,
+          hash: null,
+          name: 'cover.png',
+          meta: null,
+          type: 'image',
+        };
+      } else if (current?.coverImage) {
+        // Preserve the existing cover verbatim rather than nulling it.
+        coverImage = {
+          id: current.coverImage.id,
+          url: current.coverImage.url,
+          width: current.coverImage.width,
+          height: current.coverImage.height,
+          hash: current.coverImage.hash ?? null,
+          name: current.coverImage.name ?? 'cover',
+          meta: current.coverImage.meta ?? null,
+          type: current.coverImage.type ?? 'image',
+        };
+      } else {
+        coverImage = null;
+      }
+
+      const status = args.status ?? current?.status ?? 'Draft';
+      const nsfwLevel =
+        args.nsfwLevel !== undefined
+          ? (NSFW_MAP[args.nsfwLevel] ?? 1)
+          : (current?.userNsfwLevel ?? 1);
+      const tags =
+        args.tags !== undefined
+          ? args.tags.map((name) => ({ name: name.toLowerCase() }))
+          : (current?.tags ?? []).map((t) => ({ id: t.id, name: t.name }));
+
       const input: Record<string, unknown> = {
         title: args.title,
         content: html,
-        coverImage: coverUuid
-          ? {
-              url: coverUuid,
-              width: coverW ?? 1024,
-              height: coverH ?? 576,
-              hash: null,
-              name: 'cover.png',
-              meta: null,
-              type: 'image',
-            }
-          : null,
-        tags: (args.tags ?? []).map((name) => ({ name: name.toLowerCase() })),
-        userNsfwLevel: NSFW_MAP[args.nsfwLevel] ?? 1,
-        status: args.status,
+        coverImage,
+        tags,
+        userNsfwLevel: nsfwLevel,
+        status,
       };
       if (args.id) input.id = args.id;
+      if (current?.attachments) input.attachments = current.attachments;
+      if (current?.lockedProperties) input.lockedProperties = current.lockedProperties;
 
-      const result = await services.trpc.call<{ id?: number } | number>('article.upsert', input);
+      // publishedAt is z.date() server-side: without the superjson hint it fails to
+      // deserialize and a published article silently loses its publish date.
+      const metaValues: MetaValues = {};
+      if (current?.publishedAt) {
+        input.publishedAt = current.publishedAt;
+        metaValues.publishedAt = ['Date'];
+      }
+
+      const result = await services.trpc.call<{ id?: number } | number>(
+        'article.upsert',
+        input,
+        'POST',
+        Object.keys(metaValues).length > 0 ? metaValues : undefined
+      );
       const id = typeof result === 'number' ? result : result?.id;
       return ok(
-        `Article ${args.id ? 'updated' : 'created'} as ${args.status}.` +
+        `Article ${args.id ? 'updated' : 'created'} as ${status}` +
+          ` (content sent as ${asHtml ? 'html' : 'markdown'}).` +
+          (args.id ? `\nPreserved: status, publishedAt, cover and tags not explicitly overridden.` : '') +
           (id ? `\nID: ${id}\nView: ${services.config.webUrl}/articles/${id}` : ''),
-        { ok: true, id, status: args.status, coverImageUuid: coverUuid }
+        { ok: true, id, status, contentFormat: asHtml ? 'html' : 'markdown', coverImageUuid: coverUuid }
       );
     }
   );
