@@ -90,10 +90,9 @@ export function unwrapTrpcResult(data: unknown): unknown {
         // Describes the payload rather than quoting it: this message is copied
         // into the model's context and any MCP log. 8 chars separates `<!DOCTYP`
         // from `{"error"` from `eyJhbGci`, and is safe ONLY because the sole
-        // credential any response carries is a JWT (today: user.getToken), whose
-        // first 8 characters are
-        // structural. Re-check that premise before adding a procedure that
-        // returns an opaque secret.
+        // credential any response carries is a JWT (today: user.getToken),
+        // whose first 8 characters are structural. Re-check that premise before
+        // adding a procedure that returns an opaque secret.
         `Unrecognized tRPC response payload: expected a superjson envelope or a devalue string, got a ${
           resultData.length
         }-character string starting ${JSON.stringify(resultData.slice(0, 8))}`
