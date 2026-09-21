@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ToolModule } from '../server.js';
-import { ok, type Services } from './helpers.js';
+import { displayDate, ok, type Services } from './helpers.js';
 import { uploadImage } from './images.js';
 
 /**
@@ -16,7 +16,7 @@ import { uploadImage } from './images.js';
  *   3. ONE call to post.createWithImages (atomic; the server handles cleanup if a
  *      part fails, so there is no orphan-draft window to clean up client-side)
  *
- * post.createWithImages output `publishedAt` is a superjson Date — callers reading
+ * post.createWithImages output `publishedAt` is a Date — callers reading
  * structuredContent should treat it as a Date string.
  *
  * Requires the MediaWrite scope on the API key (a Full key works).
@@ -26,7 +26,7 @@ interface PostRow {
   id: number;
   title?: string | null;
   detail?: string | null;
-  publishedAt?: string | null;
+  publishedAt?: string | Date | null;
   nsfwLevel?: number;
   imageCount?: number;
   user?: { id?: number; username?: string };
@@ -38,7 +38,7 @@ interface CreateWithImagesResult {
   detail?: string | null;
   modelVersionId?: number | null;
   collectionId?: number | null;
-  publishedAt?: string | null;
+  publishedAt?: string | Date | null;
   imageIds?: number[];
   nsfwLevel?: number;
 }
@@ -118,7 +118,6 @@ export const postTools: ToolModule = (reg) => {
       if (args.modelVersionId) input.modelVersionId = args.modelVersionId;
       if (args.collectionId) input.collectionId = args.collectionId;
 
-      // One atomic call. publishedAt comes back as a superjson Date.
       const res = await services.trpc.call<CreateWithImagesResult>('post.createWithImages', input);
       if (!res?.id) throw new Error('post.createWithImages did not return an id');
 
@@ -153,7 +152,7 @@ export const postTools: ToolModule = (reg) => {
       const text = [
         `Post #${post.id}${post.title ? ` — ${post.title}` : ''}`,
         `By: ${post.user?.username ?? `user#${post.user?.id}`}`,
-        `Published: ${post.publishedAt ?? '(draft)'}`,
+        `Published: ${displayDate(post.publishedAt) ?? '(draft)'}`,
         `URL: ${services.config.webUrl}/posts/${post.id}`,
       ].join('\n');
       return ok(text, {

@@ -32,6 +32,22 @@ export interface ToolResult {
 }
 
 /** Build a successful tool result with both a text block and structured JSON. */
+/**
+ * A devalue-writing pool decodes date fields to real `Date`s where a superjson
+ * one yields ISO strings (this client drops superjson's `meta`), so an
+ * interpolated date would read `Thu Jan 02 2026 ... GMT+0000` or
+ * `2026-01-02T03:04:05.006Z` depending only on which pool served the call.
+ *
+ * Passes non-Dates through untouched rather than normalising via `new Date(x)`:
+ * that would throw `RangeError` on `undefined` and on an unparseable string,
+ * which is exactly what the `?? 'N/A'` and `?? '(draft)'` fallbacks render.
+ */
+export function displayDate(
+  value: string | Date | null | undefined
+): string | null | undefined {
+  return value instanceof Date ? value.toISOString() : value;
+}
+
 export function ok(text: string, structured?: Record<string, unknown>): ToolResult {
   const result: ToolResult = { content: [{ type: 'text', text }] };
   if (structured) result.structuredContent = structured;

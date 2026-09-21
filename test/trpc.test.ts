@@ -36,9 +36,11 @@ describe('parseTrpcError', () => {
   });
 
   // Pins a DELIBERATE asymmetry: unwrapTrpcResult throws on a string it cannot
-  // decode, this degrades quietly. Do not make the two consistent. A 500 whose
-  // body is an HTML error page arrives here, and throwing would replace a
-  // readable API error with a decoder crash. Passes on pre-fix code by design.
+  // decode, this degrades quietly. Do not make the two consistent. A throw here
+  // lands INSIDE the surrounding try, so the catch swallows it and appends 500
+  // characters of the raw body to the message instead - the same exposure the
+  // unrecognized-payload message was narrowed to avoid, on a 500 whose body is
+  // an HTML error page. Passes on pre-fix code by design.
   it('does not throw on an error string it cannot decode', () => {
     const body = JSON.stringify({ error: 'not-devalue' });
     const err = parseTrpcError('x.y', 500, 'Server Error', body);
@@ -97,6 +99,17 @@ describe('unwrapTrpcResult', () => {
     expect(() => unwrapTrpcResult({ result: { data: 'not-devalue' } })).toThrow(
       /Unrecognized tRPC response payload/
     );
+  });
+
+  // The one response whose result.data IS a credential is user.getToken, and
+  // this message is copied into the model's context and any MCP log. The first
+  // assertion keeps it diagnostic (a JWT is still tellable from <!DOCTYP or
+  // {"error"); the second is the one that fails if someone widens the slice
+  // back for debuggability. Neither works without the other.
+  it('describes an undecodable payload without quoting it', () => {
+    const jwt = `header.${'x'.repeat(200)}.sig`;
+    expect(() => unwrapTrpcResult({ result: { data: jwt } })).toThrow(/starting "header\.x/);
+    expect(() => unwrapTrpcResult({ result: { data: jwt } })).not.toThrow(/x{20}/);
   });
 
   // A devalue pool falls back to superjson for a single non-POJO response, so

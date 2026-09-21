@@ -1,20 +1,10 @@
 import { z } from 'zod';
 import type { ToolModule } from '../server.js';
-import { ok } from './helpers.js';
+import { displayDate, ok } from './helpers.js';
 import { mdToHtml } from '../lib/markdown.js';
 import { uploadImage } from './images.js';
 
 const NSFW_MAP: Record<string, number> = { PG: 1, PG13: 2, R: 4, X: 8, XXX: 16, Blocked: 32 };
-
-/**
- * A devalue-writing pool decodes date fields to real `Date`s where a superjson
- * one yields ISO strings (this client drops superjson's `meta`), so an
- * interpolated date would read `Thu Jan 02 2026 ... GMT+0000` or
- * `2026-01-02T03:04:05.006Z` depending only on which pool served the call.
- */
-function displayDate(value: unknown): unknown {
-  return value instanceof Date ? value.toISOString() : value;
-}
 
 interface ArticleRow {
   id: number;
@@ -170,7 +160,7 @@ export const articleTools: ToolModule = (reg) => {
         });
       }
 
-      const result = await services.trpc.call<{ status?: string; publishedAt?: string }>(
+      const result = await services.trpc.call<{ status?: string; publishedAt?: string | Date }>(
         'article.upsert',
         input,
         'POST',
