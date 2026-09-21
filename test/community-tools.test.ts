@@ -267,6 +267,22 @@ describe('notifications payloads', () => {
     expect((calls[0]!.input as Record<string, unknown>).cursor).toBeTypeOf('string');
   });
 
+  // Deliberate, and the reason is not local: a devalue pool decodes nextCursor
+  // to a real Date, and the model copies this value out of the PROSE and hands
+  // it back as args.cursor. Date.toString() drops milliseconds, which shifts a
+  // createdAt-keyed cursor. Do not simplify back to interpolating nextCursor.
+  it('renders nextCursor as an ISO string even when the pool returns a Date', async () => {
+    const tools = collect(notificationTools);
+    const { schema, handler } = tools.get('list_notifications')!;
+    const svc = services();
+    const when = new Date('2026-01-02T03:04:05.006Z');
+    stubTrpc(svc, () => ({ items: [], nextCursor: when }));
+    const res = await handler(parse(schema, {}), svc);
+    const text = (res.content ?? []).map((c) => (c as { text?: string }).text ?? '').join('');
+    expect(text).toContain('nextCursor: 2026-01-02T03:04:05.006Z');
+    expect(text).not.toContain('GMT');
+  });
+
   it('mark_notifications_read sends id as a string with the bigint hint', async () => {
     const tools = collect(notificationTools);
     const { schema, handler } = tools.get('mark_notifications_read')!;

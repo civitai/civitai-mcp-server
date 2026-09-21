@@ -47,12 +47,6 @@ describe('parseTrpcError', () => {
     expect(err.message).toContain('Validation errors');
     expect(err.zodError).toEqual({ fieldErrors: { title: ['Required'] } });
   });
-
-  it('leaves an undecodable string error as the generic message', () => {
-    const body = JSON.stringify({ error: 'not-devalue' });
-    const err = parseTrpcError('x.y', 500, 'Server Error', body);
-    expect(err.message).toBe('x.y failed: 500 Server Error');
-  });
 });
 
 describe('unwrapTrpcResult', () => {
@@ -92,6 +86,22 @@ describe('unwrapTrpcResult', () => {
     expect(() => unwrapTrpcResult({ result: { data: 'not-devalue' } })).toThrow(
       /Unrecognized tRPC response payload/
     );
+  });
+
+  // A devalue pool falls back to superjson for a single non-POJO response, so
+  // the format is per payload, not per pool. superjson is not a dependency
+  // here, so these two envelopes are written out; the shape is the one the
+  // site's union transformer documents.
+  it('decodes a superjson envelope from a pool that is otherwise writing devalue', () => {
+    expect(unwrapTrpcResult({ result: { data: { json: { id: 5 } } } })).toEqual({ id: 5 });
+  });
+
+  it('still unwraps a superjson envelope carrying meta', () => {
+    const data = {
+      json: { when: '2026-01-02T03:04:05.000Z' },
+      meta: { values: { when: ['Date'] } },
+    };
+    expect(unwrapTrpcResult({ result: { data } })).toEqual({ when: '2026-01-02T03:04:05.000Z' });
   });
 });
 

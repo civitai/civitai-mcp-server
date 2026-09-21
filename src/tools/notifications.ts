@@ -63,7 +63,7 @@ export const notificationTools: ToolModule = (reg) => {
       const res = await services.trpc.call<{
         items?: NotificationRow[];
         notifications?: NotificationRow[];
-        nextCursor?: string | null;
+        nextCursor?: string | Date | null;
       }>('notification.getAllByUser', input, 'GET', { cursor: ['Date'] });
 
       const items = res.items ?? res.notifications ?? [];
@@ -72,10 +72,14 @@ export const notificationTools: ToolModule = (reg) => {
         const flag = n.read ? '' : ' [UNREAD]';
         return `#${n.id} ${n.type ?? n.category ?? 'notification'}${flag} ${when}`.trimEnd();
       });
+      // A devalue pool decodes nextCursor to a real Date, whose toString() form
+      // loses milliseconds when handed back as the cursor. The model copies this
+      // value out of the prose, so it has to be the same ISO string either way.
+      const nextCursor = res.nextCursor ? new Date(res.nextCursor).toISOString() : null;
       return ok(
         (lines.join('\n') || 'No notifications.') +
-          (res.nextCursor ? `\n\nMore available — nextCursor: ${res.nextCursor}` : ''),
-        { count: items.length, nextCursor: res.nextCursor ?? null, items }
+          (nextCursor ? `\n\nMore available — nextCursor: ${nextCursor}` : ''),
+        { count: items.length, nextCursor, items }
       );
     }
   );
