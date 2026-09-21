@@ -35,6 +35,17 @@ describe('parseTrpcError', () => {
     expect(err.message).toBe('x.y: plain');
   });
 
+  // Pins a DELIBERATE asymmetry: unwrapTrpcResult throws on a string it cannot
+  // decode, this degrades quietly. Do not make the two consistent. A 500 whose
+  // body is an HTML error page arrives here, and throwing would replace a
+  // readable API error with a decoder crash. Passes on pre-fix code by design.
+  it('does not throw on an error string it cannot decode', () => {
+    const body = JSON.stringify({ error: 'not-devalue' });
+    const err = parseTrpcError('x.y', 500, 'Server Error', body);
+    expect(err.message).toBe('x.y failed: 500 Server Error');
+    expect(err.status).toBe(500);
+  });
+
   it('surfaces message and zodError from a devalue-encoded error', () => {
     const body = JSON.stringify({
       error: devalueStringify({
@@ -89,13 +100,11 @@ describe('unwrapTrpcResult', () => {
   });
 
   // A devalue pool falls back to superjson for a single non-POJO response, so
-  // the format is per payload, not per pool. superjson is not a dependency
-  // here, so these two envelopes are written out; the shape is the one the
-  // site's union transformer documents.
-  it('decodes a superjson envelope from a pool that is otherwise writing devalue', () => {
-    expect(unwrapTrpcResult({ result: { data: { json: { id: 5 } } } })).toEqual({ id: 5 });
-  });
-
+  // the format is per payload, not per pool. The `unwraps result.data.json`
+  // case above IS that case; this one adds the part it does not cover, that
+  // `meta` is discarded rather than revived. superjson is not a dependency
+  // here, so the envelope is written out; the shape is the one the site's
+  // union transformer documents.
   it('still unwraps a superjson envelope carrying meta', () => {
     const data = {
       json: { when: '2026-01-02T03:04:05.000Z' },
@@ -174,6 +183,26 @@ describe('TrpcClient (mocked fetch)', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(client().call('chat.markAllAsRead', undefined)).resolves.toEqual({ ok: true });
+  });
+
+  it('throws a TrpcError carrying zodError from a DEVALUE error body', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: devalueStringify({ message: 'nope', data: { zodError: { x: 1 } } }),
+            }),
+            { status: 400 }
+          )
+      )
+    );
+    await expect(client().call('x.y', {})).rejects.toMatchObject({
+      status: 400,
+      zodError: { x: 1 },
+    });
+    await expect(client().call('x.y', {})).rejects.toThrow(/x\.y: nope/);
   });
 
   it('throws a TrpcError carrying zodError on non-2xx', async () => {

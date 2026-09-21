@@ -10,6 +10,7 @@ import { notificationTools } from '../src/tools/notifications.js';
 import { chatTools } from '../src/tools/chat.js';
 import { bountyTools } from '../src/tools/bounties.js';
 import { whoamiTools } from '../src/tools/whoami.js';
+import { articleTools } from '../src/tools/articles.js';
 
 /**
  * Capture each tool module's handlers via a fake registrar so we can invoke a
@@ -252,6 +253,28 @@ describe('add_to_collection payload', () => {
       imageId: 88,
       collections: [{ collectionId: 1 }, { collectionId: 2 }],
     });
+  });
+});
+
+describe('article date rendering', () => {
+  // Same class as the nextCursor pin below, display-only half: a devalue pool
+  // decodes publishedAt to a real Date, and interpolating it raw would make the
+  // same tool print a different string depending only on which pool served it.
+  it('renders publishedAt as an ISO string when the pool returns a Date', async () => {
+    const tools = collect(articleTools);
+    const { schema, handler } = tools.get('get_article')!;
+    const svc = services();
+    stubTrpc(svc, () => ({
+      id: 7,
+      title: 'T',
+      content: '',
+      status: 'Published',
+      publishedAt: new Date('2026-01-02T03:04:05.006Z'),
+    }));
+    const res = await handler(parse(schema, { id: 7 }), svc);
+    const text = (res.content ?? []).map((c) => (c as { text?: string }).text ?? '').join('');
+    expect(text).toContain('Published: 2026-01-02T03:04:05.006Z');
+    expect(text).not.toContain('GMT');
   });
 });
 

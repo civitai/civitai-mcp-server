@@ -6,12 +6,22 @@ import { uploadImage } from './images.js';
 
 const NSFW_MAP: Record<string, number> = { PG: 1, PG13: 2, R: 4, X: 8, XXX: 16, Blocked: 32 };
 
+/**
+ * A devalue-writing pool decodes date fields to real `Date`s where a superjson
+ * one yields ISO strings (this client drops superjson's `meta`), so an
+ * interpolated date would read `Thu Jan 02 2026 ... GMT+0000` or
+ * `2026-01-02T03:04:05.006Z` depending only on which pool served the call.
+ */
+function displayDate(value: unknown): unknown {
+  return value instanceof Date ? value.toISOString() : value;
+}
+
 interface ArticleRow {
   id: number;
   title: string;
   content: string;
   status?: string;
-  publishedAt?: string;
+  publishedAt?: string | Date;
   userNsfwLevel?: number;
   coverImage?: {
     id?: number;
@@ -116,7 +126,7 @@ export const articleTools: ToolModule = (reg) => {
       );
       if (!current) throw new Error(`Article ${args.id} not found (or not visible to your account)`);
       if (current.status === 'Published') {
-        return ok(`Article ${args.id} is already Published (publishedAt=${current.publishedAt}).`, {
+        return ok(`Article ${args.id} is already Published (publishedAt=${displayDate(current.publishedAt)}).`, {
           ok: true,
           id: args.id,
           status: 'Published',
@@ -167,7 +177,7 @@ export const articleTools: ToolModule = (reg) => {
         { publishedAt: ['Date'] }
       );
       return ok(
-        `Article ${args.id} published.\nStatus: ${result.status}\nPublished at: ${result.publishedAt}\nURL: ${services.config.webUrl}/articles/${args.id}`,
+        `Article ${args.id} published.\nStatus: ${result.status}\nPublished at: ${displayDate(result.publishedAt)}\nURL: ${services.config.webUrl}/articles/${args.id}`,
         { ok: true, id: args.id, status: result.status, publishedAt: result.publishedAt }
       );
     }
@@ -214,7 +224,7 @@ export const articleTools: ToolModule = (reg) => {
       if (!current) throw new Error(`Article ${args.id} not found (or not visible to your account)`);
       const text = [
         `# ${current.title} (ID: ${current.id})`,
-        `Status: ${current.status ?? 'Unknown'}  |  Published: ${current.publishedAt ?? 'N/A'}`,
+        `Status: ${current.status ?? 'Unknown'}  |  Published: ${displayDate(current.publishedAt) ?? 'N/A'}`,
         `Tags: ${(current.tags ?? []).map((t) => t.name).join(', ') || 'none'}`,
         `URL: ${services.config.webUrl}/articles/${current.id}`,
       ].join('\n');
