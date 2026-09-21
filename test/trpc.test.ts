@@ -91,6 +91,35 @@ describe('TrpcClient (mocked fetch)', () => {
     expect(res).toEqual({ id: 42, username: 'bob' });
   });
 
+  it('sends json:null for a no-argument procedure on GET', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      // Not `{}`: JSON.stringify({ json: undefined }) drops the key, and Civitai's
+      // tRPC rejects an input without `json` as "Invalid input".
+      const decoded = decodeURIComponent(url.split('input=')[1]!);
+      expect(JSON.parse(decoded)).toEqual({ json: null });
+      return new Response(JSON.stringify({ result: { data: { json: { unread: 0 } } } }), {
+        status: 200,
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(client().call('user.checkNotifications', undefined, 'GET')).resolves.toEqual({
+      unread: 0,
+    });
+  });
+
+  it('sends json:null for a no-argument procedure on POST', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({ json: null });
+      return new Response(JSON.stringify({ result: { data: { json: { ok: true } } } }), {
+        status: 200,
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(client().call('chat.markAllAsRead', undefined)).resolves.toEqual({ ok: true });
+  });
+
   it('throws a TrpcError carrying zodError on non-2xx', async () => {
     vi.stubGlobal(
       'fetch',
