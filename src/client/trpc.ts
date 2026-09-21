@@ -1,3 +1,5 @@
+import { parse as devalueParse } from 'devalue';
+
 import type { AuthContext } from './auth.js';
 
 /**
@@ -9,6 +11,12 @@ import type { AuthContext } from './auth.js';
  *    z.date() fields deserialize as Date server-side instead of staying strings.
  *  - Error unwrap: err.error.json ?? err.error; surfaces data.zodError details.
  *  - Result unwrap: data.result.data.json ?? data.result.data ?? data.
+ *
+ * Both unwraps additionally sniff the response format: the site is migrating its
+ * tRPC response transformer from superjson to devalue PER POOL, and the two are
+ * told apart by type alone - superjson always writes an OBJECT ({ json, meta? }),
+ * devalue always writes a STRING. A pool can also fall back to superjson for a
+ * single response, so the sniff is per payload, not per deployment.
  */
 
 export type MetaValues = Record<string, string[]>;
@@ -39,7 +47,12 @@ export function parseTrpcError(
   let zodError: unknown;
   try {
     const err = JSON.parse(bodyText);
-    const inner = err?.error?.json ?? err?.error ?? err;
+    let error = err?.error;
+    if (typeof error === 'string') {
+      const decoded = tryDecodeDevalue(error);
+      if (decoded.ok) error = decoded.value;
+    }
+    const inner = error?.json ?? error ?? err;
     if (inner?.message) message = `${procedure}: ${inner.message}`;
     if (inner?.data?.zodError) {
       zodError = inner.data.zodError;
@@ -51,14 +64,38 @@ export function parseTrpcError(
   return new TrpcError(message, status, zodError);
 }
 
-/** Unwrap the nested tRPC/superjson result envelope. Exported for testing. */
+/**
+ * Decode a devalue payload. Reported through a wrapper rather than a sentinel
+ * because `devalue.stringify(undefined)` is the valid payload `"-1"`, so a bare
+ * `undefined` return cannot be told apart from a successful decode.
+ */
+function tryDecodeDevalue(payload: string): { ok: true; value: any } | { ok: false } {
+  try {
+    return { ok: true, value: devalueParse(payload) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Unwrap the nested tRPC result envelope, superjson or devalue. Exported for testing. */
 export function unwrapTrpcResult(data: unknown): unknown {
   const d = data as
     | { result?: { data?: { json?: unknown } | unknown } }
     | undefined;
-  const resultData = d?.result?.data as { json?: unknown } | undefined;
+  const resultData = d?.result?.data;
+  if (typeof resultData === 'string') {
+    const decoded = tryDecodeDevalue(resultData);
+    if (!decoded.ok) {
+      throw new Error(
+        `Unrecognized tRPC response payload: expected a superjson envelope or a devalue string, got ${JSON.stringify(
+          resultData.slice(0, 120)
+        )}`
+      );
+    }
+    return decoded.value;
+  }
   if (resultData && typeof resultData === 'object' && 'json' in resultData) {
-    return resultData.json;
+    return (resultData as { json?: unknown }).json;
   }
   return resultData ?? data;
 }
