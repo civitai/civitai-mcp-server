@@ -10,6 +10,7 @@ import { notificationTools } from '../src/tools/notifications.js';
 import { chatTools } from '../src/tools/chat.js';
 import { bountyTools } from '../src/tools/bounties.js';
 import { whoamiTools } from '../src/tools/whoami.js';
+import { articleTools } from '../src/tools/articles.js';
 
 /**
  * Capture each tool module's handlers via a fake registrar so we can invoke a
@@ -255,6 +256,64 @@ describe('add_to_collection payload', () => {
   });
 });
 
+describe('post date rendering', () => {
+  // Third displayDate call site. Measured: without this, un-fixing posts.ts
+  // left the whole suite green.
+  it('renders publishedAt as an ISO string when the pool returns a Date', async () => {
+    const tools = collect(postTools);
+    const { schema, handler } = tools.get('get_post')!;
+    const svc = services();
+    stubTrpc(svc, () => ({
+      id: 9,
+      title: 'P',
+      publishedAt: new Date('2026-01-02T03:04:05.006Z'),
+    }));
+    const res = await handler(parse(schema, { id: 9 }), svc);
+    const text = (res.content ?? []).map((c) => (c as { text?: string }).text ?? '').join('');
+    expect(text).toContain('Published: 2026-01-02T03:04:05.006Z');
+    expect(text).not.toContain('GMT');
+  });
+});
+
+describe('article date rendering', () => {
+  // Same class as the nextCursor pin below, display-only half: a devalue pool
+  // decodes publishedAt to a real Date, and interpolating it raw would make the
+  // same tool print a different string depending only on which pool served it.
+  // displayDate has three call sites; this is the one a user reads straight
+  // after a write, so it gets its own pin rather than riding on get_article's.
+  it('renders publish_article output as an ISO string when the pool returns a Date', async () => {
+    const tools = collect(articleTools);
+    const { schema, handler } = tools.get('publish_article')!;
+    const svc = services();
+    stubTrpc(svc, (procedure) =>
+      procedure === 'article.getById'
+        ? { id: 7, title: 'T', content: '', status: 'Draft' }
+        : { status: 'Published', publishedAt: new Date('2026-01-02T03:04:05.006Z') }
+    );
+    const res = await handler(parse(schema, { id: 7 }), svc);
+    const text = (res.content ?? []).map((c) => (c as { text?: string }).text ?? '').join('');
+    expect(text).toContain('Published at: 2026-01-02T03:04:05.006Z');
+    expect(text).not.toContain('GMT');
+  });
+
+  it('renders publishedAt as an ISO string when the pool returns a Date', async () => {
+    const tools = collect(articleTools);
+    const { schema, handler } = tools.get('get_article')!;
+    const svc = services();
+    stubTrpc(svc, () => ({
+      id: 7,
+      title: 'T',
+      content: '',
+      status: 'Published',
+      publishedAt: new Date('2026-01-02T03:04:05.006Z'),
+    }));
+    const res = await handler(parse(schema, { id: 7 }), svc);
+    const text = (res.content ?? []).map((c) => (c as { text?: string }).text ?? '').join('');
+    expect(text).toContain('Published: 2026-01-02T03:04:05.006Z');
+    expect(text).not.toContain('GMT');
+  });
+});
+
 describe('notifications payloads', () => {
   it('list_notifications defaults cursor to now and applies the Date hint', async () => {
     const tools = collect(notificationTools);
@@ -265,6 +324,22 @@ describe('notifications payloads', () => {
     expect(calls[0]!.procedure).toBe('notification.getAllByUser');
     expect(calls[0]!.meta).toEqual({ cursor: ['Date'] });
     expect((calls[0]!.input as Record<string, unknown>).cursor).toBeTypeOf('string');
+  });
+
+  // Deliberate, and the reason is not local: a devalue pool decodes nextCursor
+  // to a real Date, and the model copies this value out of the PROSE and hands
+  // it back as args.cursor. Date.toString() drops milliseconds, which shifts a
+  // createdAt-keyed cursor. Do not simplify back to interpolating nextCursor.
+  it('renders nextCursor as an ISO string even when the pool returns a Date', async () => {
+    const tools = collect(notificationTools);
+    const { schema, handler } = tools.get('list_notifications')!;
+    const svc = services();
+    const when = new Date('2026-01-02T03:04:05.006Z');
+    stubTrpc(svc, () => ({ items: [], nextCursor: when }));
+    const res = await handler(parse(schema, {}), svc);
+    const text = (res.content ?? []).map((c) => (c as { text?: string }).text ?? '').join('');
+    expect(text).toContain('nextCursor: 2026-01-02T03:04:05.006Z');
+    expect(text).not.toContain('GMT');
   });
 
   it('mark_notifications_read sends id as a string with the bigint hint', async () => {

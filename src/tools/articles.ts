@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ToolModule } from '../server.js';
-import { ok } from './helpers.js';
+import { displayDate, ok } from './helpers.js';
 import { mdToHtml } from '../lib/markdown.js';
 import { uploadImage } from './images.js';
 
@@ -11,7 +11,7 @@ interface ArticleRow {
   title: string;
   content: string;
   status?: string;
-  publishedAt?: string;
+  publishedAt?: string | Date;
   userNsfwLevel?: number;
   coverImage?: {
     id?: number;
@@ -116,7 +116,7 @@ export const articleTools: ToolModule = (reg) => {
       );
       if (!current) throw new Error(`Article ${args.id} not found (or not visible to your account)`);
       if (current.status === 'Published') {
-        return ok(`Article ${args.id} is already Published (publishedAt=${current.publishedAt}).`, {
+        return ok(`Article ${args.id} is already Published (publishedAt=${displayDate(current.publishedAt)}).`, {
           ok: true,
           id: args.id,
           status: 'Published',
@@ -160,14 +160,14 @@ export const articleTools: ToolModule = (reg) => {
         });
       }
 
-      const result = await services.trpc.call<{ status?: string; publishedAt?: string }>(
+      const result = await services.trpc.call<{ status?: string; publishedAt?: string | Date }>(
         'article.upsert',
         input,
         'POST',
         { publishedAt: ['Date'] }
       );
       return ok(
-        `Article ${args.id} published.\nStatus: ${result.status}\nPublished at: ${result.publishedAt}\nURL: ${services.config.webUrl}/articles/${args.id}`,
+        `Article ${args.id} published.\nStatus: ${result.status}\nPublished at: ${displayDate(result.publishedAt)}\nURL: ${services.config.webUrl}/articles/${args.id}`,
         { ok: true, id: args.id, status: result.status, publishedAt: result.publishedAt }
       );
     }
@@ -214,7 +214,7 @@ export const articleTools: ToolModule = (reg) => {
       if (!current) throw new Error(`Article ${args.id} not found (or not visible to your account)`);
       const text = [
         `# ${current.title} (ID: ${current.id})`,
-        `Status: ${current.status ?? 'Unknown'}  |  Published: ${current.publishedAt ?? 'N/A'}`,
+        `Status: ${current.status ?? 'Unknown'}  |  Published: ${displayDate(current.publishedAt) ?? 'N/A'}`,
         `Tags: ${(current.tags ?? []).map((t) => t.name).join(', ') || 'none'}`,
         `URL: ${services.config.webUrl}/articles/${current.id}`,
       ].join('\n');

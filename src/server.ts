@@ -24,7 +24,7 @@ import { chatTools } from './tools/chat.js';
 import { bountyTools } from './tools/bounties.js';
 
 export const SERVER_NAME = 'civitai-mcp-server';
-export const SERVER_VERSION = '0.1.0';
+export const SERVER_VERSION = '0.2.0';
 
 interface ToolConfig<Shape extends ZodRawShape> {
   title?: string;

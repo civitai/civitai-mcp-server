@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ToolModule } from '../server.js';
-import { ok } from './helpers.js';
+import { displayDate, ok } from './helpers.js';
 
 /**
  * Notifications (notification.* + user.checkNotifications).
@@ -63,7 +63,7 @@ export const notificationTools: ToolModule = (reg) => {
       const res = await services.trpc.call<{
         items?: NotificationRow[];
         notifications?: NotificationRow[];
-        nextCursor?: string | null;
+        nextCursor?: string | Date | null;
       }>('notification.getAllByUser', input, 'GET', { cursor: ['Date'] });
 
       const items = res.items ?? res.notifications ?? [];
@@ -72,10 +72,15 @@ export const notificationTools: ToolModule = (reg) => {
         const flag = n.read ? '' : ' [UNREAD]';
         return `#${n.id} ${n.type ?? n.category ?? 'notification'}${flag} ${when}`.trimEnd();
       });
+      // The model copies this value out of the prose and hands it back as
+      // args.cursor, so it has to be the same string whichever pool served the
+      // call - Date.toString() would drop the milliseconds a createdAt-keyed
+      // cursor needs. Same rule as every other date field, so same helper.
+      const nextCursor = displayDate(res.nextCursor) ?? null;
       return ok(
         (lines.join('\n') || 'No notifications.') +
-          (res.nextCursor ? `\n\nMore available — nextCursor: ${res.nextCursor}` : ''),
-        { count: items.length, nextCursor: res.nextCursor ?? null, items }
+          (nextCursor ? `\n\nMore available — nextCursor: ${nextCursor}` : ''),
+        { count: items.length, nextCursor, items }
       );
     }
   );
