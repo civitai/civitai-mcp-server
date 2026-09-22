@@ -56,7 +56,7 @@ export const chatTools: ToolModule = (reg) => {
         undefined,
         'GET'
       );
-      const chats = Array.isArray(res) ? res : (res.items ?? []);
+      const chats = Array.isArray(res) ? res : (res?.items ?? []);
       const lines = chats.map((c) => {
         const names = (c.chatMembers ?? [])
           .map((m) => m.user?.username ?? `user#${m.userId ?? m.user?.id}`)
@@ -65,7 +65,18 @@ export const chatTools: ToolModule = (reg) => {
       });
       return ok((lines.join('\n') || 'No chats.') + `\n\n(${chats.length} chat(s))`, {
         count: chats.length,
-        chats: chats.map((c) => ({ id: c.id, members: c.chatMembers })),
+        // Project rather than passing chatMembers through. Each raw member carries a
+        // full nested `user` with profilePicture (metadata, hash, dimensions) and
+        // cosmetics arrays — ~20k characters for 18 chats, almost all of it profile
+        // decoration this tool never claimed to return.
+        chats: chats.map((c) => ({
+          id: c.id,
+          members: (c.chatMembers ?? []).map((m) => ({
+            userId: m.userId ?? m.user?.id ?? null,
+            username: m.user?.username ?? null,
+            isOwner: m.isOwner ?? null,
+          })),
+        })),
       });
     }
   );
