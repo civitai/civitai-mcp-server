@@ -56,7 +56,7 @@ export const chatTools: ToolModule = (reg) => {
         undefined,
         'GET'
       );
-      const chats = Array.isArray(res) ? res : (res.items ?? []);
+      const chats = Array.isArray(res) ? res : (res?.items ?? []);
       const lines = chats.map((c) => {
         const names = (c.chatMembers ?? [])
           .map((m) => m.user?.username ?? `user#${m.userId ?? m.user?.id}`)
@@ -97,7 +97,7 @@ export const chatTools: ToolModule = (reg) => {
         items?: ChatMessageRow[];
         nextCursor?: number | null;
       }>('chat.getInfiniteMessages', input, 'GET');
-      const items = res.items ?? [];
+      const items = res?.items ?? [];
       const lines = items.map((m) => {
         const who = m.user?.username ?? `user#${m.userId}`;
         const when = m.createdAt ? new Date(m.createdAt).toISOString().slice(0, 16).replace('T', ' ') : '';
@@ -105,8 +105,8 @@ export const chatTools: ToolModule = (reg) => {
       });
       return ok(
         (lines.join('\n') || 'No messages.') +
-          (res.nextCursor ? `\n\nOlder history available — nextCursor: ${res.nextCursor}` : ''),
-        { chatId: args.chatId, count: items.length, nextCursor: res.nextCursor ?? null, items }
+          (res?.nextCursor ? `\n\nOlder history available — nextCursor: ${res?.nextCursor}` : ''),
+        { chatId: args.chatId, count: items.length, nextCursor: res?.nextCursor ?? null, items }
       );
     }
   );
