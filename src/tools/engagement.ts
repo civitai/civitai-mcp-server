@@ -123,16 +123,33 @@ export const engagementTools: ToolModule = (reg) => {
     },
     async (args, services) => {
       services.auth.requireKey();
-      const res = await services.trpc.call<{
+      type Review = {
         id?: number;
         rating?: number;
         recommended?: boolean;
         details?: string;
-      } | null>('resourceReview.getUserResourceReview', { modelVersionId: args.modelVersionId }, 'GET');
-      if (!res) return ok(`You have not reviewed model version ${args.modelVersionId}.`, { reviewed: false });
+      };
+      const res = await services.trpc.call<Review | Review[] | null>(
+        'resourceReview.getUserResourceReview',
+        { modelVersionId: args.modelVersionId },
+        'GET'
+      );
+      // Upstream answers `[]` when there is no review — truthy, so the `!res` guard
+      // never fired and the tool asserted `reviewed: true` with every field
+      // undefined. Unwrap the array shape and key off the id instead.
+      const review = Array.isArray(res) ? res[0] : res;
+      if (!review || review.id == null) {
+        return ok(`You have not reviewed model version ${args.modelVersionId}.`, { reviewed: false });
+      }
       return ok(
-        `Your review of model version ${args.modelVersionId}: ${res.rating}/5, recommended=${res.recommended} (id ${res.id}).`,
-        { reviewed: true, id: res.id, rating: res.rating, recommended: res.recommended }
+        `Your review of model version ${args.modelVersionId}: ${review.rating}/5, recommended=${review.recommended} (id ${review.id}).`,
+        {
+          reviewed: true,
+          id: review.id,
+          rating: review.rating,
+          recommended: review.recommended,
+          details: review.details,
+        }
       );
     }
   );
