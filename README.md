@@ -6,7 +6,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that gives AI
 agents first-class access to Civitai: browse models, images, and creators; post
 and publish work; react, review, follow, and collect; write articles and
 comments; send and reply to direct messages; create and enter bounties; and
-(for moderators) manage site announcements and the changelog. 53 tools, exposed
+(for moderators) manage site announcements and the changelog. 54 tools, exposed
 over Streamable HTTP or stdio.
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
@@ -192,7 +192,7 @@ the env key is used.
 
 ---
 
-## Tool catalog (53 tools)
+## Tool catalog (54 tools)
 
 Every tool returns both a compact human-readable text block and a
 `structuredContent` JSON payload. Read-only tools are marked `readOnlyHint: true`;
@@ -211,6 +211,7 @@ render the same list.
 | `search_images` | Search images with full generation metadata (`withMeta=true`). |
 | `get_image` | Batch image details: prompt, negative, sampler, steps, CFG, seed, resources. |
 | `search_creators` | Search creators/users. |
+| `list_articles` | Search/list articles (`article.getInfinite`) by author, query or tag ids. Metadata only — no bodies. Paginate by passing `nextCursor` back as `cursor`. |
 | `list_enums` | List filter enum values (model types, sorts, base models, timeframes). |
 
 ### Posts (auth - onboarded, non-muted)
@@ -239,7 +240,7 @@ render the same list.
 | `upsert_article` | Create/update. Markdown to HTML. Cover by UUID or URL (auto-uploaded). |
 | `publish_article` | getById to rebuild to upsert with the `publishedAt: ['Date']` hint. Idempotent. |
 | `unpublish_article` | Dedicated `article.unpublish`. |
-| `get_article` | Fetch by ID. |
+| `get_article` | Fetch by ID: metadata plus `contentLength`. Body is opt-in via `includeContent` (HTML, 20-45k chars). |
 
 ### Comments (auth)
 | Tool | Description |

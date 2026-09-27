@@ -9,10 +9,10 @@ describe('createServer', () => {
   // Phase 2 (P0 community participation) adds 26: posts 4, engagement 8,
   // collections 3, notifications 3, chat 4, bounties 4. => 52.
   // Composite-endpoint rewire split chat read tools into mark_chat_read (per-chat)
-  // + mark_all_chats_read (blanket) => 53 total.
-  it('registers the full tool catalog (53 tools)', () => {
+  // + mark_all_chats_read (blanket) + list_articles => 54 total.
+  it('registers the full tool catalog (54 tools)', () => {
     const { toolCount } = createServer(parseConfig({}));
-    expect(toolCount).toBe(53);
+    expect(toolCount).toBe(54);
   });
 });
 
