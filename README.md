@@ -307,7 +307,7 @@ render the same list.
 ### Platform feedback (auth - `AppBlocksSubmit` scope or a full-access key)
 | Tool | Description |
 |---|---|
-| `send_platform_feedback` | Tell Civitai its developer platform (CLI, SDK, docs, review, sandbox, scopes, this server) got in the way. `platformFeedback.create`. Every free-text field is scrubbed before sending (the Civitai CLI's redaction rules); returns a `ref`. Gated server-side by a feature flag. |
+| `send_platform_feedback` | Tell Civitai its developer platform (CLI, SDK, docs, review, sandbox, scopes, this server) got in the way. `platformFeedback.create`. Text is sent as given (no client-side redaction) - don't paste secrets; returns a `ref`. Gated server-side by a feature flag. |
 | `get_platform_feedback_status` | Read back 1-50 refs: received / acknowledged / fixed (with version) / addressed / not_planned, plus Civitai's note. `platformFeedback.getStatus`. |
 
 ### Utility

@@ -1,4 +1,3 @@
-import { homedir } from 'node:os';
 import { z } from 'zod';
 import type { ToolModule } from '../server.js';
 import { SERVER_VERSION } from '../version.js';
@@ -9,10 +8,11 @@ import {
   PLATFORM_FEEDBACK_DOC_URL_PREFIX,
   PLATFORM_FEEDBACK_GET_STATUS,
   PLATFORM_FEEDBACK_KINDS,
+  REPORT_REF_RE,
   STATUS_REF_RE,
   alignStatusItems,
   buildPlatformFeedbackInput,
-  normalizeStatusRefs,
+  dedupeStatusRefs,
   platformFeedbackFailure,
   type PlatformFeedbackCreateResult,
 } from '../lib/platform-feedback.js';
@@ -22,11 +22,12 @@ import { ok } from './helpers.js';
  * Developer-platform feedback (platformFeedback.create / .getStatus), the same
  * channel as `civitai feedback send|status` in the Civitai CLI. Both procedures
  * need the AppBlocksSubmit token scope (a full-access personal key passes) and
- * are gated by a Civitai feature flag; the wire contract, redaction and error
- * mapping live in src/lib/platform-feedback.ts.
+ * are gated by a Civitai feature flag; the wire contract and error mapping
+ * live in src/lib/platform-feedback.ts. Text is sent as given (no client-side
+ * redaction, by decision — see that file).
  */
 
-/** The raw excerpt an agent may hand over; it is redacted, then cut to the server's 500. */
+/** The raw excerpt an agent may hand over; it is cut to the server's 500 before sending. */
 const ERROR_EXCERPT_INPUT_MAX = 20_000;
 
 const SCOPE_NOTE =
@@ -46,9 +47,7 @@ export const platformFeedbackTools: ToolModule = (reg) => {
         'are building, for feedback about a Civitai app or model, or for site support. ' +
         'Give a short message plus whatever structured detail you have (about, kind, a site key in `ref`, the ' +
         'command or tool, an HTTP status, an error excerpt, the docs URL). This server adds its own name and ' +
-        'version. Every free-text field is scrubbed before it leaves this server (URL credentials and query ' +
-        'strings, Authorization headers, known token formats, KEY=value secrets, e-mail addresses, home-directory ' +
-        'user names), but scrubbing matches shapes and misses some: do not paste secrets. ' +
+        'version. The text is sent to Civitai as given: do not paste secrets, tokens or personal data. ' +
         'Returns a ref; pass it to get_platform_feedback_status later to see whether Civitai acknowledged or ' +
         `fixed it. A matching earlier report is counted rather than duplicated. ${SCOPE_NOTE}`,
       inputSchema: {
@@ -67,7 +66,7 @@ export const platformFeedbackTools: ToolModule = (reg) => {
         ref: z
           .string()
           .max(LIMITS.ref)
-          .regex(/^[a-z0-9][a-z0-9._-]{0,79}$/)
+          .regex(REPORT_REF_RE)
           .optional()
           .describe(
             'Optional site key naming WHERE it failed, e.g. "submit.server-refused" (lowercase a-z, 0-9, . _ -). ' +
@@ -84,7 +83,7 @@ export const platformFeedbackTools: ToolModule = (reg) => {
           .string()
           .max(ERROR_EXCERPT_INPUT_MAX)
           .optional()
-          .describe('The relevant error output. Scrubbed, then cut to the first 500 characters.'),
+          .describe('The relevant error output; only the first 500 characters are sent.'),
         docUrl: z
           .string()
           .max(LIMITS.docUrl)
@@ -114,11 +113,8 @@ export const platformFeedbackTools: ToolModule = (reg) => {
     },
     async (args, services) => {
       try {
-        const key = services.auth.requireKey();
-        const { input, redactions, excerptClipped } = buildPlatformFeedbackInput(args, SERVER_VERSION, {
-          tokens: [key],
-          home: services.config.transport === 'stdio' ? homedir() : undefined,
-        });
+        services.auth.requireKey();
+        const { input, excerptClipped } = buildPlatformFeedbackInput(args, SERVER_VERSION);
         const res = await services.trpc.call<PlatformFeedbackCreateResult>(PLATFORM_FEEDBACK_CREATE, input, 'POST');
 
         const lines = [
@@ -131,10 +127,7 @@ export const platformFeedbackTools: ToolModule = (reg) => {
         ];
         // The note is text Civitai wrote; it is quoted as data, not instructions.
         if (res.note) lines.push(`Civitai's note: ${quote(res.note)}`);
-        if (redactions.length) {
-          lines.push(`Removed before sending: ${redactions.map((r) => `${r.count} ${r.kind}`).join(', ')}.`);
-        }
-        if (excerptClipped) lines.push(`The error excerpt was cut to its first ${LIMITS.errorExcerpt} characters after scrubbing.`);
+        if (excerptClipped) lines.push(`The error excerpt was cut to its first ${LIMITS.errorExcerpt} characters.`);
         lines.push(`To check on it later, call get_platform_feedback_status with refs: [${quote(res.ref)}].`);
 
         return ok(lines.join('\n'), {
@@ -144,7 +137,6 @@ export const platformFeedbackTools: ToolModule = (reg) => {
           fixedIn: res.fixedIn ?? null,
           note: res.note ?? null,
           reporters: res.reporters,
-          redactions,
           excerptClipped,
           hint: 'Pass ref to get_platform_feedback_status to read its status later.',
         });
@@ -175,7 +167,7 @@ export const platformFeedbackTools: ToolModule = (reg) => {
     async (args, services) => {
       try {
         services.auth.requireKey();
-        const refs = normalizeStatusRefs(args.refs);
+        const refs = dedupeStatusRefs(args.refs);
         const got = await services.trpc.call<unknown>(PLATFORM_FEEDBACK_GET_STATUS, { refs }, 'GET');
         const items = alignStatusItems(refs, got);
 

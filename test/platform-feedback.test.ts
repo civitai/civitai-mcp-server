@@ -6,12 +6,7 @@ import { parseConfig } from '../src/config.js';
 import { buildServices, type Services, type ToolResult } from '../src/tools/helpers.js';
 import { platformFeedbackTools } from '../src/tools/platform-feedback.js';
 import { SERVER_VERSION } from '../src/version.js';
-import {
-  buildPlatformFeedbackInput,
-  normalizeStatusRefs,
-  refuseIfTokenInRequest,
-  PlatformFeedbackInputError,
-} from '../src/lib/platform-feedback.js';
+import { CLIENT_VERSION_RE, LIMITS, dedupeStatusRefs } from '../src/lib/platform-feedback.js';
 
 /**
  * send_platform_feedback / get_platform_feedback_status against a FAKE SERVER:
@@ -87,32 +82,38 @@ async function status(args: Record<string, unknown>, svc = services()) {
 afterEach(() => vi.restoreAllMocks());
 
 describe('send_platform_feedback wire shape', () => {
-  it('POSTs the literal tRPC payload, scrubbed, with client=civitai-mcp and this server version', async () => {
+  it('POSTs the literal tRPC payload, as given, with client=civitai-mcp and this server version', async () => {
     const seen = fakeServer(() => trpcOk(CREATED));
     const res = await send({
-      message: `civitai app submit hung after printing my key ${API_KEY}`,
+      message: 'civitai app submit hung after the upload step',
       about: 'cli',
       ref: 'submit.server-refused',
-      command: 'civitai app submit --dir /home/okonkwo/apps/demo',
+      command: 'civitai app submit --dir ./apps/demo',
       httpStatus: 500,
       exitCode: 1,
-      errorExcerpt: 'POST https://civitai.com/api/x?sig=Rk3Vt9Wm2Xq7Zb5Lc1 -> 500',
+      errorExcerpt: 'POST https://civitai.com/api/x?attempt=2 -> 500',
       docUrl: 'https://developer.civitai.com/apps/submit#flags',
       appSlug: 'demo',
       agent: 'claude-code',
+      os: 'linux',
+      arch: 'arm64',
+      sdk: [{ name: '@civitai/app-sdk', version: '0.69.0' }],
     });
     expect(res.isError).toBeUndefined();
     expect(seen).toHaveLength(1);
     expect(seen[0]!.url).toBe('https://api.fake.test/api/trpc/platformFeedback.create');
     expect(seen[0]!.method).toBe('POST');
     expect(seen[0]!.headers.Authorization).toBe(`Bearer ${API_KEY}`);
+    // Sent as given: no client-side redaction (by decision), so the query and
+    // fragment the agent wrote are in the request.
     expect(seen[0]!.body).toBe(
-      '{"json":{"message":"civitai app submit hung after printing my key <token>",' +
+      '{"json":{"message":"civitai app submit hung after the upload step",' +
         '"report":{"about":"cli","kind":"bug","client":{"name":"civitai-mcp","version":"' + PKG_VERSION + '"},' +
-        '"ref":"submit.server-refused","agent":"claude-code",' +
-        '"command":"civitai app submit --dir /home/<user>/apps/demo","exitCode":1,"httpStatus":500,' +
-        '"docUrl":"https://developer.civitai.com/apps/submit",' +
-        '"errorExcerpt":"POST https://civitai.com/api/x -> 500","appSlug":"demo"}}}'
+        '"ref":"submit.server-refused","agent":"claude-code","os":"linux","arch":"arm64",' +
+        '"command":"civitai app submit --dir ./apps/demo","exitCode":1,"httpStatus":500,' +
+        '"sdk":[{"name":"@civitai/app-sdk","version":"0.69.0"}],' +
+        '"docUrl":"https://developer.civitai.com/apps/submit#flags",' +
+        '"errorExcerpt":"POST https://civitai.com/api/x?attempt=2 -> 500","appSlug":"demo"}}}'
     );
     expect(res.structuredContent).toEqual({
       ref: '5123-3f9a01bc',
@@ -121,17 +122,11 @@ describe('send_platform_feedback wire shape', () => {
       fixedIn: null,
       note: null,
       reporters: 1,
-      redactions: [
-        { kind: 'token', count: 1 },
-        { kind: 'url-query', count: 2 },
-        { kind: 'user-path', count: 1 },
-      ],
       excerptClipped: false,
       hint: 'Pass ref to get_platform_feedback_status to read its status later.',
     });
     expect(res.content[0]!.text).toContain('call get_platform_feedback_status with refs: ["5123-3f9a01bc"]');
   });
-
   it('omits every unset optional field (never a zero value) and defaults kind to bug', async () => {
     const seen = fakeServer(() => trpcOk(CREATED));
     await send({ message: 'the review page never loads', about: 'review' });
@@ -140,10 +135,11 @@ describe('send_platform_feedback wire shape', () => {
     );
   });
 
-  it('the version it reports is package.json\'s (invariant guard: the two agree today)', () => {
+  it("the version it reports is package.json's and fits the server's pattern (invariant guard: true today)", () => {
     expect(SERVER_VERSION).toBe(PKG_VERSION);
+    expect(SERVER_VERSION).toMatch(CLIENT_VERSION_RE);
+    expect(SERVER_VERSION.length).toBeLessThanOrEqual(LIMITS.version);
   });
-
   it('renders a duplicate with its fix and Civitai\'s note quoted as data', async () => {
     fakeServer(() =>
       trpcOk({ ...CREATED, duplicate: true, status: 'fixed', fixedIn: { component: 'cli', version: '0.9.1' }, note: 'Upgrade the CLI.', reporters: 4, reports: 9 })
@@ -158,136 +154,43 @@ describe('send_platform_feedback wire shape', () => {
   });
 });
 
-describe('every agent-supplied free-text field is scrubbed', () => {
-  // 🔴 A LEDGER: the string-valued inputs of send_platform_feedback, asserted
-  // in full. A new string input fails this until it is added here — and the
-  // case below then puts a secret in it and proves it is scrubbed.
-  const STRING_FIELDS = ['message', 'ref', 'command', 'errorExcerpt', 'docUrl', 'appSlug', 'agent', 'os', 'arch', 'sdk[].name', 'sdk[].version'];
-
-  it('the ledger matches the tool\'s input schema', () => {
-    const { schema } = collect().get('send_platform_feedback')!;
-    const found: string[] = [];
-    const visit = (t: z.ZodTypeAny, path: string) => {
-      const inner = t instanceof z.ZodOptional || t instanceof z.ZodDefault ? t._def.innerType : t;
-      if (inner instanceof z.ZodString) found.push(path);
-      else if (inner instanceof z.ZodArray) visit(inner.element, `${path}[]`);
-      else if (inner instanceof z.ZodObject) for (const [k, v] of Object.entries(inner.shape)) visit(v as z.ZodTypeAny, `${path}.${k}`);
-    };
-    for (const [k, v] of Object.entries(schema)) visit(v as z.ZodTypeAny, k);
-    expect(found.sort()).toEqual([...STRING_FIELDS].sort());
+describe('what the zod schema cannot see', () => {
+  it('cuts the error excerpt to the server\'s 500 characters, and says so', async () => {
+    const seen = fakeServer(() => trpcOk(CREATED));
+    const res = await send({ message: 'm', about: 'cli', errorExcerpt: 'e'.repeat(600) });
+    expect((JSON.parse(seen[0]!.body!).json.report.errorExcerpt as string)).toBe('e'.repeat(500));
+    expect(res.structuredContent!.excerptClipped).toBe(true);
+    expect(res.content[0]!.text).toContain('cut to its first 500 characters');
   });
 
-  it('a secret in each string field is gone from the request', async () => {
+  it('control: an excerpt of exactly 500 is sent whole and not reported as cut', async () => {
     const seen = fakeServer(() => trpcOk(CREATED));
-    // One DISTINCT secret per string field. Long fields get a GitHub-token
-    // shape; the 16/32-character fields get an e-mail address, the longest
-    // redacted shape that fits. The API key is not used, so the exact-token
-    // rule cannot be what removes them. (ref is covered by the refusal test
-    // below: a changed site key is refused, not sent.)
-    // 40 characters: `ghp_` + 36, the shortest GitHub-token shape, and the agent/sdk-name maximum.
-    const gh = (n: number) => `ghp_${String(n).repeat(2)}Hn8Wq2Zr6Tb0Vx3Ly7Kc1Md5Pf9Sg2Uj`;
-    const secrets = {
-      message: gh(10), command: gh(11), errorExcerpt: gh(12), appSlug: gh(13), agent: gh(14), sdkName: gh(17),
-      os: 'q@osmail.io', arch: 'r@archmail.io', sdkVersion: 's@sdkvermail.io', docUrl: 'Zq7S3cr3tDocUrlValue1',
-    };
-    const res = await send({
-      message: `failed with ${secrets.message}`,
-      about: 'sdk',
-      command: `run ${secrets.command}`,
-      errorExcerpt: `err ${secrets.errorExcerpt}`,
-      appSlug: secrets.appSlug,
-      agent: secrets.agent,
-      os: secrets.os,
-      arch: secrets.arch,
-      docUrl: `https://developer.civitai.com/x?token=${secrets.docUrl}`,
-      sdk: [{ name: secrets.sdkName, version: secrets.sdkVersion }],
-    });
-    expect(res.isError ?? false).toBe(false);
-    expect(seen).toHaveLength(1);
-    for (const [field, v] of Object.entries(secrets)) expect(seen[0]!.body, field).not.toContain(v);
-    const json = JSON.parse(seen[0]!.body!).json as { message: string; report: Record<string, unknown> };
-    expect(json.message).toBe('failed with <credential>');
-    expect(json.report).toMatchObject({
-      command: 'run <credential>',
-      errorExcerpt: 'err <credential>',
-      appSlug: '<credential>',
-      agent: '<credential>',
-      os: '<email>',
-      arch: '<email>',
-      docUrl: 'https://developer.civitai.com/x',
-      sdk: [{ name: '<credential>', version: '<email>' }],
-    });
-  });
-
-  it('the exact API key in the message is replaced, not just credential shapes', async () => {
-    const seen = fakeServer(() => trpcOk(CREATED));
-    await send({ message: `key is ${API_KEY}.`, about: 'scopes' });
-    expect(seen[0]!.body).not.toContain(API_KEY);
-    expect(JSON.parse(seen[0]!.body!).json.message).toBe('key is <token>.');
-  });
-
-  it('cuts the error excerpt to 500 characters AFTER scrubbing, and says so', async () => {
-    const seen = fakeServer(() => trpcOk(CREATED));
-    // 750 characters raw, 449 once each user name becomes <user>: not cut.
-    const res = await send({ message: 'm', about: 'cli', errorExcerpt: '/home/abcdefghijklmnop/x '.repeat(30) });
-    const excerpt = JSON.parse(seen[0]!.body!).json.report.errorExcerpt as string;
-    expect(excerpt.length).toBeLessThanOrEqual(500);
-    expect(excerpt).not.toContain('abcdefghijklmnop');
+    const res = await send({ message: 'm', about: 'cli', errorExcerpt: 'e'.repeat(500) });
+    expect((JSON.parse(seen[0]!.body!).json.report.errorExcerpt as string).length).toBe(500);
     expect(res.structuredContent!.excerptClipped).toBe(false);
-
-    const seen2 = fakeServer(() => trpcOk(CREATED));
-    const res2 = await send({ message: 'm', about: 'cli', errorExcerpt: 'e'.repeat(600) });
-    expect((JSON.parse(seen2[0]!.body!).json.report.errorExcerpt as string).length).toBe(500);
-    expect(res2.structuredContent!.excerptClipped).toBe(true);
   });
 
-  it('refuses, without sending, a site-key ref that redaction changed', async () => {
+  it('never cuts an excerpt between the halves of a surrogate pair', async () => {
     const seen = fakeServer(() => trpcOk(CREATED));
-    const res = await send({ message: 'm', about: 'cli', ref: API_KEY });
-    expect(seen).toHaveLength(0);
-    expect(res.isError).toBe(true);
-    expect(res.structuredContent!.code).toBe('invalid_input');
-    expect(String(res.structuredContent!.error)).toMatch(/^ref looks like it contains a credential/);
-    expect(String(res.structuredContent!.error)).not.toContain(API_KEY);
+    // 499 units then an astral character: a naive slice(0, 500) ends on a lone high surrogate.
+    await send({ message: 'm', about: 'cli', errorExcerpt: `${'e'.repeat(499)}\u{1F600}tail` });
+    expect(JSON.parse(seen[0]!.body!).json.report.errorExcerpt).toBe('e'.repeat(499));
   });
 
-  it('refuses, without sending, a docUrl whose credential userinfo takes its prefix', async () => {
+  it('removes a NUL and repairs an unpaired surrogate, in the message and in report fields', async () => {
     const seen = fakeServer(() => trpcOk(CREATED));
-    const res = await send({ message: 'm', about: 'docs', docUrl: 'https://developer.civitai.com/x@y/p' });
+    await send({ message: 'bad\u0000 \uD800 text', about: 'other', command: 'run\u0000 \uDC00x' });
+    const json = JSON.parse(seen[0]!.body!).json;
+    expect(json.message).toBe('bad \uFFFD text');
+    expect(json.report.command).toBe('run \uFFFDx');
+  });
+
+  it('refuses, without sending, a message that is blank once trimmed', async () => {
+    const seen = fakeServer(() => trpcOk(CREATED));
+    const res = await send({ message: '   \n ', about: 'other' });
     expect(seen).toHaveLength(0);
     expect(res.structuredContent).toMatchObject({ ok: false, code: 'invalid_input' });
-    expect(String(res.structuredContent!.error)).toContain('docUrl must start with https://developer.civitai.com/');
-  });
-
-  it('refuses, without sending, a message that grows past 2000 characters when redacted', async () => {
-    const seen = fakeServer(() => trpcOk(CREATED));
-    // 1994 characters raw; each 'a@b.io' (6) becomes '<email>' (7), so 2279 redacted.
-    const res = await send({ message: 'a@b.io '.repeat(285).trim(), about: 'other' });
-    expect(seen).toHaveLength(0);
-    expect(res.structuredContent).toMatchObject({ code: 'invalid_input' });
-    expect(String(res.structuredContent!.error)).toMatch(/^message must be 1 to 2000 characters after redaction/);
-  });
-
-  it('removes a NUL and repairs an unpaired surrogate instead of sending text the server refuses', async () => {
-    const seen = fakeServer(() => trpcOk(CREATED));
-    await send({ message: 'bad\u0000 \uD800 text', about: 'other' });
-    expect(JSON.parse(seen[0]!.body!).json.message).toBe('bad � text');
-  });
-});
-
-describe('the API-key backstop (invariant guard: no current field reaches it un-redacted)', () => {
-  it('refuses a request whose decoded strings still contain the key', () => {
-    expect(() =>
-      refuseIfTokenInRequest(
-        { message: 'ok', report: { about: 'cli', kind: 'bug', client: { name: 'civitai-mcp', version: '1.0.0' }, appSlug: `x${API_KEY}` } },
-        [API_KEY]
-      )
-    ).toThrow(PlatformFeedbackInputError);
-  });
-  it('control: passes a request without it', () => {
-    expect(() =>
-      refuseIfTokenInRequest({ message: 'ok', report: { about: 'cli', kind: 'bug', client: { name: 'civitai-mcp', version: '1.0.0' } } }, [API_KEY])
-    ).not.toThrow();
+    expect(res.content[0]!.text).toBe('Error: message is blank — nothing was sent');
   });
 });
 
@@ -392,23 +295,8 @@ describe('get_platform_feedback_status', () => {
     expect(parse(Array.from({ length: 50 }, (_, i) => ref(i)))).toBe(true);
   });
 
-  it('bounds hold behind the schema too: normalizeStatusRefs refuses 0, 51 and malformed', () => {
-    expect(() => normalizeStatusRefs([])).toThrow(/1 to 50 refs, got 0/);
-    expect(() => normalizeStatusRefs(Array.from({ length: 51 }, (_, i) => ref(i)))).toThrow(/1 to 50 refs, got 51/);
-    expect(() => normalizeStatusRefs(['ok-1', 'bad ref'])).toThrow(/not a feedback ref/);
-    // De-duplication counts AFTER collapsing: 60 copies of one ref is one ref.
-    expect(normalizeStatusRefs(Array.from({ length: 60 }, () => '5123-3f9a01bc'))).toEqual(['5123-3f9a01bc']);
-  });
-});
-
-describe('buildPlatformFeedbackInput', () => {
-  it('home-path redaction applies only to the home it is given (stdio mode)', () => {
-    const { input, redactions } = buildPlatformFeedbackInput(
-      { message: 'in /srv/agent-home/work it failed', about: 'cli' },
-      '0.2.0',
-      { tokens: [API_KEY], home: '/srv/agent-home' }
-    );
-    expect(input.message).toBe('in ~/work it failed');
-    expect(redactions).toEqual([{ kind: 'home-path', count: 1 }]);
+  it('de-duplicates refs, keeping the order they were asked in', () => {
+    expect(dedupeStatusRefs(['2-0123abcd', '1-0123abcd', '2-0123abcd'])).toEqual(['2-0123abcd', '1-0123abcd']);
+    expect(dedupeStatusRefs(Array.from({ length: 50 }, () => '5123-3f9a01bc'))).toEqual(['5123-3f9a01bc']);
   });
 });

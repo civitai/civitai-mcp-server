@@ -1,6 +1,5 @@
 import { TrpcError } from '../client/trpc.js';
 import type { ToolResult } from '../tools/helpers.js';
-import { Redactor, type RedactionCount } from './redact.js';
 
 /**
  * Civitai developer-platform feedback (`platformFeedback.create` /
@@ -8,13 +7,15 @@ import { Redactor, type RedactionCount } from './redact.js';
  * CLI, SDK, docs, review, sandbox, scopes, this MCP server — got in its way,
  * and reading back whether it is known or fixed.
  *
- * 🔴 THIS FILE IS THE ONE PLACE THE WIRE CONTRACT LIVES in this server:
- * procedure names, field names, enums, bounds, the redaction applied before
- * sending, and the error mapping. It mirrors the server's schema
- * (civitai/civitai `src/server/schema/platform-feedback.schema.ts`) and the CLI's
- * client (civitai/cli `internal/appapi/platform_feedback.go`). Every bound is
- * enforced HERE, because the server rejects an oversize value rather than
- * clipping it.
+ * This file holds the wire contract (procedure names, enums, bounds) and the
+ * error mapping. It mirrors the server's schema (civitai/civitai
+ * `src/server/schema/platform-feedback.schema.ts`). The field bounds are
+ * enforced by the tools' zod input schemas; this file adds only what zod
+ * cannot see.
+ *
+ * Feedback sent through this server is NOT redacted client-side, by decision:
+ * the hosted server runs on Civitai's own infrastructure, so scrubbing here
+ * would hide nothing from the Civitai server that receives the report.
  */
 
 export const PLATFORM_FEEDBACK_CREATE = 'platformFeedback.create';
@@ -49,9 +50,9 @@ export const LIMITS = {
 export const REPORT_REF_RE = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 /** A server-issued report ref (e.g. `5123-3f9a01bc`), held to the CLI's conservative shape. */
 export const STATUS_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
-const VERSION_RE = /^[0-9A-Za-z.+-]+$/;
-/** A NUL or an unpaired surrogate: Postgres stores neither, and the server refuses both. */
-const UNSTORABLE_RE = /\u0000|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+/** report.client.version's pattern on the server. */
+export const CLIENT_VERSION_RE = /^[0-9A-Za-z.+-]+$/;
+
 const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 export type PlatformFeedbackAbout = (typeof PLATFORM_FEEDBACK_ABOUT)[number];
@@ -128,45 +129,38 @@ export class PlatformFeedbackInputError extends Error {
   }
 }
 
-/** Server-owned fields of the input: never agent text, so never scrubbed. */
-const NOT_FREE_TEXT = new Set(['report.about', 'report.kind', 'report.client.name', 'report.client.version']);
-
-/** Fields cut (after redaction) rather than refused when too long. Only the excerpt: it is an excerpt. */
-const CLIP_AFTER_REDACTION: Record<string, number> = { 'report.errorExcerpt': LIMITS.errorExcerpt };
-
-/** Makes text storable: NUL removed, an unpaired surrogate becomes U+FFFD (the CLI's CleanText). */
-function cleanText(s: string): string {
-  return s.replace(/\u0000/g, '').replace(LONE_SURROGATE_RE, '�');
+/**
+ * Makes text storable: the server refuses a NUL or an unpaired surrogate in
+ * any text field (Postgres stores neither), and zod's string bounds do not
+ * look for them. NUL is removed and an unpaired surrogate becomes U+FFFD, so
+ * the length never grows.
+ */
+function storable(value: unknown): unknown {
+  if (typeof value === 'string') return value.replace(/\u0000/g, '').replace(LONE_SURROGATE_RE, '�');
+  if (Array.isArray(value)) return value.map(storable);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, storable(v)]));
+  }
+  return value;
 }
 
-export interface ScrubOptions {
-  /** Credential values to remove exactly — the API key this request is made with. */
-  tokens: Array<string | undefined>;
-  /** Home directory to replace with `~` (stdio mode only; an in-cluster server's home is not the agent's). */
-  home?: string;
-}
-
-export interface ScrubResult {
-  input: PlatformFeedbackCreateInput;
-  redactions: RedactionCount[];
-  excerptClipped: boolean;
-  skippedShortTokens: number;
+/** The first `max` UTF-16 units of `s`, never ending on half a surrogate pair. */
+function clip(s: string, max: number): { text: string; clipped: boolean } {
+  if (s.length <= max) return { text: s, clipped: false };
+  return { text: s.slice(0, max).replace(/[\uD800-\uDBFF]$/, ''), clipped: true };
 }
 
 /**
- * 🔴 THE ONE SCRUB POINT. Assembles the outgoing input and runs EVERY string in
- * it through one Redactor — by walking the assembled object, not by naming
- * fields, so a field added to the report later is scrubbed without anyone
- * remembering to. Only the server-owned values in NOT_FREE_TEXT are exempt.
- * Then it validates the result against every server bound, then it checks the
- * whole serialised request for the API key as a last gate. Nothing that fails
- * any of the three is returned.
+ * Assembles the platformFeedback.create input from the tool's (zod-validated)
+ * arguments. Adds only what zod cannot express: storable text, a message that
+ * is not blank once trimmed (the server trims before its min-1 check), and
+ * the error excerpt cut to the server's 500 (the server rejects a longer one;
+ * the tool accepts more so an agent can paste a whole log).
  */
 export function buildPlatformFeedbackInput(
   args: SendPlatformFeedbackArgs,
-  clientVersion: string,
-  opts: ScrubOptions
-): ScrubResult {
+  clientVersion: string
+): { input: PlatformFeedbackCreateInput; excerptClipped: boolean } {
   const report: PlatformFeedbackReport = {
     about: args.about,
     kind: args.kind ?? 'bug',
@@ -178,174 +172,24 @@ export function buildPlatformFeedbackInput(
   ] as const;
   for (const key of optional) {
     const value = args[key];
-    if (value !== undefined && value !== '') (report as unknown as Record<string, unknown>)[key] = value;
+    if (value !== undefined && value !== '') (report as unknown as Record<string, unknown>)[key] = storable(value);
   }
-  if (report.sdk) report.sdk = report.sdk.map((s) => ({ ...s }));
 
-  const red = new Redactor({ home: opts.home, tokens: opts.tokens });
+  const message = (storable(args.message) as string).trim();
+  if (message === '') throw new PlatformFeedbackInputError('message', 'is blank');
+
   let excerptClipped = false;
-  const scrub = (value: unknown, path: string): unknown => {
-    if (typeof value === 'string') {
-      if (NOT_FREE_TEXT.has(path)) return value;
-      const text = cleanText(value);
-      const max = CLIP_AFTER_REDACTION[path];
-      if (max !== undefined) {
-        const { text: clipped, clipped: cut } = red.applyClipped(text, max);
-        excerptClipped ||= cut;
-        return clipped;
-      }
-      return red.apply(text);
-    }
-    if (Array.isArray(value)) return value.map((v, i) => scrub(v, `${path}[${i}]`));
-    if (value && typeof value === 'object') {
-      return Object.fromEntries(
-        Object.entries(value).map(([k, v]) => [k, scrub(v, path ? `${path}.${k}` : k)])
-      );
-    }
-    return value;
-  };
-  const scrubbed = scrub({ message: args.message, report }, '') as PlatformFeedbackCreateInput;
-  scrubbed.message = scrubbed.message.trim();
-  if (scrubbed.report.errorExcerpt === '') delete scrubbed.report.errorExcerpt;
-
-  // A site key is validated, not free text: if redaction changed it, it held something credential-shaped.
-  if (args.ref !== undefined && args.ref !== '' && scrubbed.report.ref !== args.ref) {
-    throw new PlatformFeedbackInputError('ref', 'looks like it contains a credential; use a short site key such as `submit.server-refused`');
+  if (report.errorExcerpt !== undefined) {
+    const { text, clipped } = clip(report.errorExcerpt, LIMITS.errorExcerpt);
+    report.errorExcerpt = text;
+    excerptClipped = clipped;
   }
-
-  validatePlatformFeedbackInput(scrubbed);
-  refuseIfTokenInRequest(scrubbed, red.tokens());
-
-  return {
-    input: scrubbed,
-    redactions: red.countsList(),
-    excerptClipped,
-    skippedShortTokens: red.skippedShortTokens(),
-  };
+  return { input: { message, report }, excerptClipped };
 }
 
-/**
- * Every bound and enum of the server's schema, checked on what will be SENT
- * (after redaction, which can lengthen text). Mirrors the CLI's Validate.
- */
-export function validatePlatformFeedbackInput(input: PlatformFeedbackCreateInput): void {
-  const fail = (field: string, problem: string): never => {
-    throw new PlatformFeedbackInputError(field, problem);
-  };
-  const { message, report: r } = input;
-  if (message.length < 1 || message.length > LIMITS.message) {
-    fail('message', `must be 1 to ${LIMITS.message} characters after redaction, got ${message.length}`);
-  }
-  const texts: Array<[string, string | undefined]> = [
-    ['message', message],
-    ['ref', r.ref],
-    ['agent', r.agent],
-    ['os', r.os],
-    ['arch', r.arch],
-    ['command', r.command],
-    ['docUrl', r.docUrl],
-    ['errorExcerpt', r.errorExcerpt],
-    ['appSlug', r.appSlug],
-    ...(r.sdk ?? []).flatMap((s, i): Array<[string, string]> => [
-      [`sdk[${i}].name`, s.name],
-      [`sdk[${i}].version`, s.version],
-    ]),
-  ];
-  for (const [field, value] of texts) {
-    if (value !== undefined && UNSTORABLE_RE.test(value)) fail(field, 'must not contain a NUL or an unpaired surrogate');
-  }
-  if (!(PLATFORM_FEEDBACK_ABOUT as readonly string[]).includes(r.about)) {
-    fail('about', `must be one of ${PLATFORM_FEEDBACK_ABOUT.join(', ')}`);
-  }
-  if (!(PLATFORM_FEEDBACK_KINDS as readonly string[]).includes(r.kind)) {
-    fail('kind', `must be one of ${PLATFORM_FEEDBACK_KINDS.join(', ')}`);
-  }
-  if (r.ref !== undefined && !REPORT_REF_RE.test(r.ref)) {
-    fail('ref', `must be 1 to ${LIMITS.ref} characters of a-z, 0-9, '.', '_' or '-', starting with a letter or digit`);
-  }
-  if (r.client.name !== PLATFORM_FEEDBACK_CLIENT_NAME) fail('client.name', `must be ${PLATFORM_FEEDBACK_CLIENT_NAME}`);
-  if (r.client.version.length < 1 || r.client.version.length > LIMITS.version || !VERSION_RE.test(r.client.version)) {
-    fail('client.version', `must be 1 to ${LIMITS.version} characters of letters, digits, '.', '+' or '-'`);
-  }
-  const bounded: Array<[string, string | undefined, number]> = [
-    ['agent', r.agent, LIMITS.agent],
-    ['os', r.os, LIMITS.os],
-    ['arch', r.arch, LIMITS.arch],
-    ['command', r.command, LIMITS.command],
-    ['docUrl', r.docUrl, LIMITS.docUrl],
-    ['errorExcerpt', r.errorExcerpt, LIMITS.errorExcerpt],
-    ['appSlug', r.appSlug, LIMITS.appSlug],
-  ];
-  for (const [field, value, max] of bounded) {
-    if (value !== undefined && value.length > max) {
-      fail(field, `must be at most ${max} characters after redaction, got ${value.length}`);
-    }
-  }
-  if (r.docUrl !== undefined && !r.docUrl.startsWith(PLATFORM_FEEDBACK_DOC_URL_PREFIX)) {
-    fail('docUrl', `must start with ${PLATFORM_FEEDBACK_DOC_URL_PREFIX} (after redaction)`);
-  }
-  if (r.exitCode !== undefined && (!Number.isInteger(r.exitCode) || r.exitCode < 0 || r.exitCode > 255)) {
-    fail('exitCode', 'must be an integer 0 to 255');
-  }
-  if (r.httpStatus !== undefined && (!Number.isInteger(r.httpStatus) || r.httpStatus < 100 || r.httpStatus > 599)) {
-    fail('httpStatus', 'must be an integer 100 to 599');
-  }
-  if (r.sdk !== undefined) {
-    if (r.sdk.length > LIMITS.sdk) fail('sdk', `must hold at most ${LIMITS.sdk} entries`);
-    r.sdk.forEach((s, i) => {
-      if (s.name.length < 1 || s.name.length > LIMITS.sdkName) fail(`sdk[${i}].name`, `must be 1 to ${LIMITS.sdkName} characters`);
-      if (s.version.length < 1 || s.version.length > LIMITS.version) {
-        fail(`sdk[${i}].version`, `must be 1 to ${LIMITS.version} characters`);
-      }
-    });
-  }
-}
-
-/**
- * The last check before a request exists: no string in it may contain a
- * credential value the redactor knows. It reads the DECODED values, so a
- * credential JSON would escape is still found. (The CLI's
- * feedbackRefuseIfTokenInBody.)
- */
-export function refuseIfTokenInRequest(input: PlatformFeedbackCreateInput, tokens: string[]): void {
-  if (tokens.length === 0) return;
-  const strings: string[] = [];
-  const walk = (v: unknown): void => {
-    if (typeof v === 'string') strings.push(v);
-    else if (Array.isArray(v)) v.forEach(walk);
-    else if (v && typeof v === 'object') {
-      for (const [k, e] of Object.entries(v)) {
-        strings.push(k);
-        walk(e);
-      }
-    }
-  };
-  walk(JSON.parse(JSON.stringify(input)));
-  if (strings.some((s) => tokens.some((t) => s.includes(t)))) {
-    throw new PlatformFeedbackInputError(
-      'request',
-      'still contains your API key after redaction; remove it from the field it is in'
-    );
-  }
-}
-
-/** Validates and de-duplicates refs for getStatus, keeping the caller's order. */
-export function normalizeStatusRefs(refs: string[]): string[] {
-  const out: string[] = [];
-  for (const raw of refs) {
-    const ref = raw.trim();
-    if (!STATUS_REF_RE.test(ref)) {
-      throw new PlatformFeedbackInputError(
-        'refs',
-        `contains ${JSON.stringify(raw.slice(0, LIMITS.statusRef))}, which is not a feedback ref — use the ref send_platform_feedback returned, e.g. 5123-3f9a01bc`
-      );
-    }
-    if (!out.includes(ref)) out.push(ref);
-  }
-  if (out.length < 1 || out.length > LIMITS.statusRefs) {
-    throw new PlatformFeedbackInputError('refs', `must hold 1 to ${LIMITS.statusRefs} refs, got ${out.length}`);
-  }
-  return out;
+/** De-duplicates refs, keeping the caller's order. Shape and count are the tool schema's job. */
+export function dedupeStatusRefs(refs: string[]): string[] {
+  return [...new Set(refs)];
 }
 
 /**
