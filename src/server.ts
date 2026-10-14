@@ -22,9 +22,10 @@ import { collectionTools } from './tools/collections.js';
 import { notificationTools } from './tools/notifications.js';
 import { chatTools } from './tools/chat.js';
 import { bountyTools } from './tools/bounties.js';
+import { platformFeedbackTools } from './tools/platform-feedback.js';
+import { SERVER_NAME, SERVER_VERSION } from './version.js';
 
-export const SERVER_NAME = 'civitai-mcp-server';
-export const SERVER_VERSION = '0.2.0';
+export { SERVER_NAME, SERVER_VERSION };
 
 interface ToolConfig<Shape extends ZodRawShape> {
   title?: string;
@@ -126,6 +127,7 @@ export function createServer(config: Config): BuiltServer {
     { category: 'Announcements (moderator)', mod: announcementTools },
     { category: 'Changelog (moderator)', mod: changelogTools },
     { category: 'Images', mod: imageTools },
+    { category: 'Platform feedback', mod: platformFeedbackTools },
     { category: 'Utility', mod: whoamiTools },
   ];
   for (const { category, mod } of modules) {

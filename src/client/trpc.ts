@@ -25,11 +25,14 @@ export type MetaValues = Record<string, string[]>;
 export class TrpcError extends Error {
   readonly status: number;
   readonly zodError: unknown;
-  constructor(message: string, status: number, zodError?: unknown) {
+  /** The server's own error message, unprefixed — for callers that classify a refusal by it. */
+  readonly serverMessage: string | undefined;
+  constructor(message: string, status: number, zodError?: unknown, serverMessage?: string) {
     super(message);
     this.name = 'TrpcError';
     this.status = status;
     this.zodError = zodError;
+    this.serverMessage = serverMessage;
   }
 }
 
@@ -45,6 +48,7 @@ export function parseTrpcError(
 ): TrpcError {
   let message = `${procedure} failed: ${status} ${statusText}`;
   let zodError: unknown;
+  let serverMessage: string | undefined;
   try {
     const err = JSON.parse(bodyText);
     let error = err?.error;
@@ -53,7 +57,10 @@ export function parseTrpcError(
       if (decoded.ok) error = decoded.value;
     }
     const inner = error?.json ?? error ?? err;
-    if (inner?.message) message = `${procedure}: ${inner.message}`;
+    if (inner?.message) {
+      message = `${procedure}: ${inner.message}`;
+      serverMessage = String(inner.message);
+    }
     if (inner?.data?.zodError) {
       zodError = inner.data.zodError;
       message += '\nValidation errors:\n' + JSON.stringify(inner.data.zodError, null, 2);
@@ -61,7 +68,7 @@ export function parseTrpcError(
   } catch {
     if (bodyText) message += `\n${bodyText.slice(0, 500)}`;
   }
-  return new TrpcError(message, status, zodError);
+  return new TrpcError(message, status, zodError, serverMessage);
 }
 
 /**

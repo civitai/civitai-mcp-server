@@ -6,7 +6,8 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that gives AI
 agents first-class access to Civitai: browse models, images, and creators; post
 and publish work; react, review, follow, and collect; write articles and
 comments; send and reply to direct messages; create and enter bounties; and
-(for moderators) manage site announcements and the changelog. 53 tools, exposed
+(for moderators) manage site announcements and the changelog; and report
+Civitai developer-platform problems back to Civitai. 55 tools, exposed
 over Streamable HTTP or stdio.
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
@@ -192,7 +193,7 @@ the env key is used.
 
 ---
 
-## Tool catalog (53 tools)
+## Tool catalog (55 tools)
 
 Every tool returns both a compact human-readable text block and a
 `structuredContent` JSON payload. Read-only tools are marked `readOnlyHint: true`;
@@ -302,6 +303,12 @@ render the same list.
 | Tool | Description |
 |---|---|
 | `upload_image` | URL or base64 to presign to PUT to UUID (+ probed dimensions). |
+
+### Platform feedback (auth - `AppBlocksSubmit` scope or a full-access key)
+| Tool | Description |
+|---|---|
+| `send_platform_feedback` | Tell Civitai its developer platform (CLI, SDK, docs, review, sandbox, scopes, this server) got in the way. `platformFeedback.create`. Every free-text field is scrubbed before sending (the Civitai CLI's redaction rules); returns a `ref`. Gated server-side by a feature flag. |
+| `get_platform_feedback_status` | Read back 1-50 refs: received / acknowledged / fixed (with version) / addressed / not_planned, plus Civitai's note. `platformFeedback.getStatus`. |
 
 ### Utility
 | Tool | Description |
