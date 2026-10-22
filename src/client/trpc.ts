@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { parse as devalueParse } from 'devalue';
 
 import type { AuthContext } from './auth.js';
@@ -136,7 +136,9 @@ export function allowsAllLevels(level: number | undefined): boolean {
 }
 
 // Services are built per MCP request, so the cache lives at module scope, keyed
-// by a hash of the API key and forwarded headers. Only successful lookups are cached.
+// by an HMAC (random per-process secret) of the API key and forwarded headers.
+// Only successful lookups are cached.
+const CACHE_KEY_SECRET = randomBytes(32);
 const BROWSING_LEVEL_TTL_MS = 60_000;
 const BROWSING_LEVEL_CACHE_MAX = 1000;
 const browsingLevelCache = new Map<string, { level: number | undefined; expires: number }>();
@@ -214,7 +216,7 @@ export class TrpcClient {
   async getBrowsingLevel(): Promise<number | undefined> {
     const key = this.auth.apiKey;
     if (!key || !this.auth.keyIsCaller || !this.auth.regionKnown()) return undefined;
-    const cacheKey = createHash('sha256')
+    const cacheKey = createHmac('sha256', CACHE_KEY_SECRET)
       .update(JSON.stringify([key, this.auth.regionHeaders]))
       .digest('hex');
     const hit = browsingLevelCache.get(cacheKey);
