@@ -334,3 +334,40 @@ describe('level cache is keyed by key AND forwarded headers', () => {
     expect(gets[0]!.params.browsingLevel).toBe(3);
   });
 });
+
+// Pinned on purpose: the hosted shape (in-cluster API URL, switch at its default)
+// must send exactly what it sent before this feature, whatever headers arrive.
+describe('hosted shape: in-cluster API URL, switch default', () => {
+  it('sends no level, no nsfw, no region headers and no user lookup', async () => {
+    const s = servicesFromHeaders(parseConfig({ CIVITAI_API_URL: 'http://civitai-app.internal:3000' }), {
+      authorization: 'Bearer caller',
+      'cf-ipcountry': 'US',
+      'cf-region-code': 'CA',
+      'x-isuk': '0',
+    });
+    const sent: Array<{ url: string; headers: Record<string, string> }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: { headers: Record<string, string> }) => {
+        sent.push({ url, headers: init.headers });
+        return new Response(JSON.stringify(url.includes('/enums') ? {} : { items: [{ id: 1 }] }), { status: 200 });
+      })
+    );
+    try {
+      await run('search_images', s);
+      await run('search_models', s);
+      await run('get_image', s, { ids: [5] });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(sent.some((c) => c.url.includes('auth.getUser'))).toBe(false);
+    for (const call of sent) {
+      const u = new URL(call.url);
+      expect(u.origin).toBe('http://civitai-app.internal:3000');
+      expect(u.searchParams.has('browsingLevel')).toBe(false);
+      expect(u.searchParams.has('nsfw')).toBe(false);
+      expect(Object.keys(call.headers).sort()).toEqual(['Authorization', 'Content-Type']);
+    }
+    expect(sent.filter((c) => c.url.includes('/api/v1/'))).toHaveLength(3);
+  });
+});
