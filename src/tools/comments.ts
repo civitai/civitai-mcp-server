@@ -91,12 +91,14 @@ async function fetchAllComments(
     const input: Record<string, unknown> = { entityType, entityId, limit, sort };
     // tRPC/zod expects a numeric cursor here; passing a string fails validation.
     if (cursor !== undefined) input.cursor = cursor;
-    const res = await services.trpc.call<{ comments?: CommentRow[]; nextCursor?: number | string }>(
+    // null when the entity has no Thread: nothing commented yet, or (for
+    // comment:<id>) a comment with no replies. That is an empty list, not an error.
+    const res = await services.trpc.call<{ comments?: CommentRow[]; nextCursor?: number | string } | null>(
       'commentv2.getInfinite',
       input,
       'GET'
     );
-    const batch = res.comments ?? [];
+    const batch = res?.comments ?? [];
     for (const c of batch) {
       if (budget.remaining <= 0) {
         budget.truncated = true;
@@ -105,7 +107,7 @@ async function fetchAllComments(
       all.push(c);
       budget.remaining--;
     }
-    const next = res.nextCursor;
+    const next = res?.nextCursor;
     if (next === undefined || next === null || budget.remaining <= 0) {
       return { comments: all, nextCursor: toNumericCursor(next) };
     }
