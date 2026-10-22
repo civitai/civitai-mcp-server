@@ -8,8 +8,6 @@ import type { AuthContext } from './auth.js';
  * Includes:
  *  - enum validation with a cached /enums fetch (case-insensitive match,
  *    returns the correctly-cased value).
- *  - the query+type Meilisearch bug workaround is implemented in the model
- *    search tool, which uses searchModelsRaw from here.
  */
 export class RestError extends Error {
   readonly status: number;

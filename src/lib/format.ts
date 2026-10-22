@@ -79,6 +79,11 @@ export function modelAirUrns(model: ModelLite): Array<{ versionId: number; air: 
   return out;
 }
 
+/** Mature models live on civitai.red; a civitai.com link to one is sent there. Other sites are left alone. */
+export function modelSiteUrl(model: ModelLite, siteUrl: string): string {
+  return model.nsfw === true && new URL(siteUrl).hostname === 'civitai.com' ? 'https://civitai.red' : siteUrl;
+}
+
 /** Compact one-line-ish model summary for search results. */
 export function formatModelResult(model: ModelLite, index: number, siteUrl: string): string {
   const versions = model.modelVersions ?? [];
@@ -107,7 +112,7 @@ export function formatModelResult(model: ModelLite, index: number, siteUrl: stri
   }
   const tags = tagNames(model.tags);
   if (tags.length) lines.push(`   Tags: ${tags.slice(0, 8).join(', ')}`);
-  lines.push(`   URL: ${siteUrl}/models/${model.id}`);
+  lines.push(`   URL: ${modelSiteUrl(model, siteUrl)}/models/${model.id}`);
   return lines.join('\n');
 }
 
@@ -118,7 +123,7 @@ export function formatModelDetail(model: ModelLite, siteUrl: string): string {
   const lines = [
     `# ${model.name} (ID: ${model.id})`,
     `Type: ${model.type}  |  Creator: ${model.creator?.username ?? 'Unknown'}`,
-    `URL: ${siteUrl}/models/${model.id}`,
+    `URL: ${modelSiteUrl(model, siteUrl)}/models/${model.id}`,
     `Downloads: ${formatNumber(stats.downloadCount)}  |  Rating: ${
       stats.rating ? stats.rating.toFixed(1) : 'N/A'
     }  |  Favorites: ${formatNumber(stats.favoriteCount)}`,

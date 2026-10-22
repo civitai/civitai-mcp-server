@@ -47,46 +47,34 @@ export const browseTools: ToolModule = (reg) => {
         ? await rest.validateEnum('period', args.period, 'MetricTimeframe')
         : undefined;
 
-      // Meilisearch bug: when query + (type|supportsGeneration) are combined the
-      // server ignores the secondary filter. Over-fetch and filter client-side.
-      const needsClientFilter = !!args.query && (!!type || !!args.supportsGeneration);
-
       const params: Record<string, string | number | boolean | undefined> = {
-        limit: needsClientFilter ? 100 : args.limit,
+        limit: args.limit,
         sort: sort ?? 'Highest Rated',
         period: period ?? 'AllTime',
         query: args.query,
+        types: type,
         baseModels: args.baseModel,
         tag: args.tag,
         username: args.username,
+        supportsGeneration: args.supportsGeneration || undefined,
         cursor: args.cursor,
       };
       // /models takes only a boolean nsfw (true = every level), so it is sent
       // only for a user who allows every level. Anything less stays at PG.
       if (allowsAllLevels(await trpc.getBrowsingLevel())) params.nsfw = true;
-      // When NOT client-filtering, push type/generation to the API directly.
-      if (!args.query) {
-        if (type) params.types = type;
-        if (args.supportsGeneration) params.supportsGeneration = true;
-      }
 
       const data = await rest.get<{ items?: ModelLite[]; metadata?: { nextCursor?: string } }>(
         '/models',
         params
       );
-      let items = data.items ?? [];
-      if (needsClientFilter) {
-        if (type) items = items.filter((m) => m.type?.toLowerCase() === type.toLowerCase());
-        // supportsGeneration isn't on the public shape reliably; type filter is the main fix.
-        items = items.slice(0, args.limit);
-      }
+      const items = data.items ?? [];
 
+      const sfwNote = params.nsfw ? '' : '\n\nResults are limited to safe-for-work models.';
       const text =
-        items.length === 0
-          ? 'No models found.' +
-            (needsClientFilter ? ' (results returned but none matched the type filter)' : '')
+        (items.length === 0
+          ? 'No models found.'
           : `Found ${items.length} model(s):\n\n` +
-            items.map((m, i) => formatModelResult(m, i, config.webUrl)).join('\n\n');
+            items.map((m, i) => formatModelResult(m, i, config.webUrl)).join('\n\n')) + sfwNote;
 
       return ok(text, {
         count: items.length,

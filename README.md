@@ -208,7 +208,7 @@ render the same list.
 ### Browse (no auth required)
 | Tool | Description |
 |---|---|
-| `search_models` | Search models. Includes AIR URNs + `nextCursor`. Client-side type-filter workaround for the Meilisearch query+type bug. |
+| `search_models` | Search models. Includes AIR URNs + `nextCursor`. Type, base model and generation filters apply on the server, with or without a query. |
 | `get_model` | Batch model details (concurrency 3): versions, files, AIR URNs. |
 | `get_model_version` | Batch version details: files, trigger words, AIR. |
 | `search_images` | Search images with full generation metadata (`withMeta=true`). |

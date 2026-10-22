@@ -338,7 +338,8 @@ describe('level cache is keyed by key AND forwarded headers', () => {
 // Pinned on purpose: the hosted shape (in-cluster API URL, switch at its default)
 // must send exactly what it sent before this feature, whatever headers arrive.
 describe('hosted shape: in-cluster API URL, switch default', () => {
-  it('tool output links stay on civitai.com', async () => {
+  // SFW models only: an nsfw:true model links to civitai.red (see search-models.test.ts).
+  it('tool output links for SFW models stay on civitai.com', async () => {
     const s = servicesFromHeaders(parseConfig({ CIVITAI_API_URL: 'http://civitai-app.internal:3000' }), {
       authorization: 'Bearer caller',
     });
