@@ -196,7 +196,7 @@ describe('what the zod schema cannot see', () => {
 
 describe('error translation', () => {
   const cases: Array<{ name: string; status: number; msg: string; code: string; includes: string[] }> = [
-    { name: 'missing scope', status: 403, msg: 'Your API key does not have the required scope for this action', code: 'missing_scope', includes: ['AppBlocksSubmit', 'full-access personal API key', 'https://civitai.red/user/account', 'CIVITAI_API_KEY'] },
+    { name: 'missing scope', status: 403, msg: 'Your API key does not have the required scope for this action', code: 'missing_scope', includes: ['AppBlocksSubmit', 'full-access personal API key', 'https://civitai.com/user/account', 'CIVITAI_API_KEY'] },
     { name: 'collection off', status: 403, msg: 'Feedback is not being collected here right now.', code: 'collection_off', includes: ['not collecting platform feedback right now', 'try again later'] },
     { name: 'some other 403', status: 403, msg: 'You cannot do that', code: 'forbidden', includes: ['Civitai said: "You cannot do that"'] },
     { name: 'rate limit', status: 429, msg: 'You have sent a lot of platform feedback. Try again later.', code: 'rate_limited', includes: ['Rate limited', 'Wait before trying again'] },

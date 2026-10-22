@@ -338,6 +338,18 @@ describe('level cache is keyed by key AND forwarded headers', () => {
 // Pinned on purpose: the hosted shape (in-cluster API URL, switch at its default)
 // must send exactly what it sent before this feature, whatever headers arrive.
 describe('hosted shape: in-cluster API URL, switch default', () => {
+  it('tool output links stay on civitai.com', async () => {
+    const s = servicesFromHeaders(parseConfig({ CIVITAI_API_URL: 'http://civitai-app.internal:3000' }), {
+      authorization: 'Bearer caller',
+    });
+    vi.spyOn(s.rest, 'fetchEnums').mockResolvedValue({});
+    vi.spyOn(s.rest, 'get').mockResolvedValue({ items: [{ id: 4201, name: 'm', type: 'LORA' }] } as never);
+    const res = await run('search_models', s);
+    const text = res.content[0]!.text;
+    expect(text).toContain('https://civitai.com/models/4201');
+    expect(text).not.toContain('civitai.red');
+  });
+
   it('sends no level, no nsfw, no region headers and no user lookup', async () => {
     const s = servicesFromHeaders(parseConfig({ CIVITAI_API_URL: 'http://civitai-app.internal:3000' }), {
       authorization: 'Bearer caller',

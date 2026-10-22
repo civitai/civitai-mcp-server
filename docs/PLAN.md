@@ -25,6 +25,7 @@ Deployment target: same k8s cluster as the Civitai app deployment. The API desti
 | Var | Default | Purpose |
 |---|---|---|
 | `CIVITAI_API_URL` | `https://civitai.red` | Base URL for ALL API calls (REST + tRPC). In-cluster override, e.g. `http://civitai-app:3000` |
+| `CIVITAI_WEB_URL` | the API site when that is public, otherwise `https://civitai.com` | Public website base for links in tool output |
 | `CIVITAI_API_KEY` | — | Bearer token for authenticated calls. Optional for browse tools (enhances results), required for user-action tools |
 | `MCP_TRANSPORT` | `http` | `http` (Streamable HTTP) or `stdio` |
 | `PORT` | `3100` | HTTP listen port |

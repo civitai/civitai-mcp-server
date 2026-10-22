@@ -100,6 +100,32 @@ describe('decideAuthChallenge', () => {
 // Integration: real express app over an ephemeral port (no upstream network).
 // ---------------------------------------------------------------------------
 
+describe('HTTP routes (OAuth enabled, hosted shape: in-cluster API URL)', () => {
+  let server: Server;
+  let base: string;
+
+  beforeAll(async () => {
+    const { app } = createApp(
+      parseConfig({ OAUTH_ENABLED: 'true', CIVITAI_API_URL: 'http://civitai-app.internal:3000' })
+    );
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, '127.0.0.1', resolve);
+    });
+    const { port } = server.address() as AddressInfo;
+    base = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('authorization_servers is the configured CIVITAI_API_URL, not the default', async () => {
+    const res = await fetch(`${base}${PROTECTED_RESOURCE_PATH}`);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.authorization_servers).toEqual(['http://civitai-app.internal:3000']);
+  });
+});
+
 describe('HTTP routes (OAuth enabled)', () => {
   let server: Server;
   let base: string;
