@@ -135,8 +135,14 @@ async function fetchModelComments(
   budget: { remaining: number; truncated: boolean }
 ): Promise<LegacyCommentRow[]> {
   const all: LegacyCommentRow[] = [];
+  // The site orders by createdAt alone and dedupes by id across pages; so do we.
+  const seen = new Set<number>();
   let cursor: number | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
+    if (budget.remaining <= 0) {
+      budget.truncated = true;
+      return all;
+    }
     const input: Record<string, unknown> = { modelId, limit, sort: sort.toLowerCase() };
     if (cursor !== undefined) input.cursor = cursor;
     const res = await services.trpc.call<{ comments?: LegacyCommentRow[]; nextCursor?: number | null } | null>(
@@ -145,6 +151,8 @@ async function fetchModelComments(
       'GET'
     );
     for (const c of res?.comments ?? []) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
       if (budget.remaining <= 0) {
         budget.truncated = true;
         return all;
@@ -159,13 +167,22 @@ async function fetchModelComments(
   return all;
 }
 
-/** Replies to a legacy comment, minus ToS violations. */
+/**
+ * Replies to a legacy comment, minus ToS violations. Null when the site refuses
+ * them: it checks the model (published, unlocked) for replies but not for the
+ * top-level list, so one refusal must not fail the whole listing.
+ */
 async function fetchModelReplies(
   services: Services,
   commentId: number,
   budget: { remaining: number; truncated: boolean }
-): Promise<LegacyCommentRow[]> {
-  const res = await services.trpc.call<LegacyCommentRow[] | null>('comment.getCommentsById', { id: commentId }, 'GET');
+): Promise<LegacyCommentRow[] | null> {
+  let res: LegacyCommentRow[] | null;
+  try {
+    res = await services.trpc.call<LegacyCommentRow[] | null>('comment.getCommentsById', { id: commentId }, 'GET');
+  } catch {
+    return null;
+  }
   const replies: LegacyCommentRow[] = [];
   for (const r of res ?? []) {
     if (r.tosViolation) continue;
@@ -227,9 +244,15 @@ export const commentTools: ToolModule = (reg) => {
         const comments = await fetchModelComments(services, args.entityId, args.limit, args.sort, budget);
         for (const c of comments) {
           lines.push(formatComment(c, '', cap));
-          if (args.depth > 0 && (c._count?.comments ?? 0) > 0 && budget.remaining > 0) {
+          if (args.depth > 0 && (c._count?.comments ?? 0) > 0) {
+            if (budget.remaining <= 0) {
+              budget.truncated = true;
+              continue;
+            }
             const replies = await fetchModelReplies(services, c.id, budget);
-            if (replies.length) {
+            if (replies === null) {
+              lines.push(`  ↳ replies unavailable`);
+            } else if (replies.length) {
               lines.push(`  ↳ ${replies.length} repl${replies.length === 1 ? 'y' : 'ies'}:`);
               for (const r of replies) lines.push(formatComment(r, '    ', cap));
             }
@@ -244,7 +267,9 @@ export const commentTools: ToolModule = (reg) => {
         : '';
       const footer = args.includeFull
         ? ''
-        : '\n\nBodies truncated to 280 chars. Use includeFull or get_comment for full text.';
+        : args.entityType === 'model'
+          ? '\n\nBodies truncated to 280 chars. Use includeFull for full text.'
+          : '\n\nBodies truncated to 280 chars. Use includeFull or get_comment for full text.';
       return ok(
         (lines.join('\n\n') || 'No comments.') +
           `\n\n(${top} top-level, depth=${args.depth})` +

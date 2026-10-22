@@ -84,7 +84,7 @@ describe('list_comments on a model reads the legacy discussion', () => {
     ['empty v2 Thread (getInfinite {comments: []})', { comments: [], nextCursor: null }],
   ])('%s -> lists the model comments and replies', async (_label, v2) => {
     const s = svc();
-    stub(s, (p, i) => (p === 'commentv2.getInfinite' ? v2 : legacy(p, i)));
+    const calls = stub(s, (p, i) => (p === 'commentv2.getInfinite' ? v2 : legacy(p, i)));
     const res = await listComments(s, { entityType: 'model', entityId: 42 });
     const text = res.content[0]!.text;
     expect(res.isError).not.toBe(true);
@@ -93,6 +93,7 @@ describe('list_comments on a model reads the legacy discussion', () => {
     expect(text).toContain('a reply');
     expect(text).not.toContain('No comments.');
     expect(res.structuredContent).toMatchObject({ topLevelCount: 2 });
+    expect(calls.some((c) => c.procedure.startsWith('commentv2.'))).toBe(false);
   });
 
   it('keeps the server order, pinned first', async () => {
@@ -171,6 +172,67 @@ describe('list_comments on a model reads the legacy discussion', () => {
       p === 'comment.getAll' ? { nextCursor: null, comments: [row(1, 'parent', { _count: { comments: 1 } })] } : null
     );
     expect((await listComments(s2, { entityType: 'model', entityId: 42 })).content[0]!.text).toContain('parent');
+  });
+});
+
+describe('model discussion edge cases', () => {
+  it('a refused reply fetch does not fail the listing', async () => {
+    const s = svc();
+    stub(s, (p) => {
+      if (p === 'comment.getAll') {
+        return { nextCursor: null, comments: [row(1, 'first', { _count: { comments: 1 } }), row(2, 'second')] };
+      }
+      if (p === 'comment.getCommentsById') throw new Error('comment.getCommentsById: No comment with id 1');
+      return null;
+    });
+    const res = await listComments(s, { entityType: 'model', entityId: 42 });
+    const text = res.content[0]!.text;
+    expect(text).toContain('first');
+    expect(text).toContain('second');
+    expect(text).toContain('replies unavailable');
+  });
+
+  it('a row repeated on the next page is listed once', async () => {
+    const s = svc();
+    stub(s, (p, i) => {
+      if (p !== 'comment.getAll') return null;
+      return i.cursor === 7
+        ? { nextCursor: null, comments: [row(6, 'repeated'), row(8, 'new')] }
+        : { nextCursor: 7, comments: [row(6, 'repeated')] };
+    });
+    const res = await listComments(s, { entityType: 'model', entityId: 42 });
+    expect(res.content[0]!.text.match(/repeated/g)).toHaveLength(1);
+    expect(res.structuredContent).toMatchObject({ topLevelCount: 2 });
+  });
+
+  it('stops at the 500-comment ceiling and reports truncation, including skipped replies', async () => {
+    const s = svc();
+    const calls = stub(s, (p, i) => {
+      if (p !== 'comment.getAll') return null;
+      // 120 per page: the site prepends pinned rows, so a page can exceed `limit`.
+      const start = (i.cursor as number | undefined) ?? 0;
+      const comments = Array.from({ length: 120 }, (_, k) => row(start + k + 1, `c${start + k + 1}`, { _count: { comments: 1 } }));
+      return { nextCursor: start + 120, comments };
+    });
+    const res = await listComments(s, { entityType: 'model', entityId: 42, limit: 100, depth: 0 });
+    expect(res.structuredContent).toMatchObject({ topLevelCount: 500, truncated: true });
+    expect(calls.filter((c) => c.procedure === 'comment.getAll')).toHaveLength(5);
+
+    const s2 = svc();
+    stub(s2, (p) =>
+      p === 'comment.getAll'
+        ? { nextCursor: null, comments: Array.from({ length: 500 }, (_, k) => row(k + 1, `c${k + 1}`, { _count: { comments: 1 } })) }
+        : [row(9999, 'reply', { parentId: 1 })]
+    );
+    const res2 = await listComments(s2, { entityType: 'model', entityId: 42, limit: 100 });
+    expect(res2.structuredContent).toMatchObject({ topLevelCount: 500, truncated: true });
+  });
+
+  it('the footer does not point model readers at get_comment', async () => {
+    const s = svc();
+    stub(s, legacy);
+    const text = (await listComments(s, { entityType: 'model', entityId: 42 })).content[0]!.text;
+    expect(text).not.toContain('get_comment');
   });
 });
 
