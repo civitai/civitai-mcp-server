@@ -32,7 +32,7 @@ export class RestClient {
   }
 
   private headers(): Record<string, string> {
-    const h: Record<string, string> = { 'Content-Type': 'application/json' };
+    const h: Record<string, string> = { ...this.auth.regionHeaders, 'Content-Type': 'application/json' };
     if (this.auth.apiKey) h['Authorization'] = `Bearer ${this.auth.apiKey}`;
     return h;
   }

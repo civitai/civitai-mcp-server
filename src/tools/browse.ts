@@ -11,6 +11,7 @@ import {
   type ModelLite,
   type ImageLite,
 } from '../lib/format.js';
+import { allowsAllLevels } from '../client/trpc.js';
 
 const MAX_CONCURRENCY = 3;
 
@@ -38,7 +39,7 @@ export const browseTools: ToolModule = (reg) => {
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (args, { rest, config }) => {
+    async (args, { rest, trpc, config }) => {
       // Validate into locals rather than mutating the SDK-parsed input object.
       const type = args.type ? await rest.validateEnum('type', args.type, 'ModelType') : undefined;
       const sort = args.sort ? await rest.validateEnum('sort', args.sort, 'ModelSort') : undefined;
@@ -60,6 +61,9 @@ export const browseTools: ToolModule = (reg) => {
         username: args.username,
         cursor: args.cursor,
       };
+      // /models takes only a boolean nsfw (true = every level), so it is sent
+      // only for a user who allows every level. Anything less stays at PG.
+      if (allowsAllLevels(await trpc.getBrowsingLevel())) params.nsfw = true;
       // When NOT client-filtering, push type/generation to the API directly.
       if (!args.query) {
         if (type) params.types = type;
@@ -171,7 +175,7 @@ export const browseTools: ToolModule = (reg) => {
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (args, { rest }) => {
+    async (args, { rest, trpc }) => {
       const sort = args.sort ? await rest.validateEnum('sort', args.sort, 'ImageSort') : undefined;
       const period = args.period
         ? await rest.validateEnum('period', args.period, 'MetricTimeframe')
@@ -188,6 +192,7 @@ export const browseTools: ToolModule = (reg) => {
         username: args.username,
         type: args.type,
         cursor: args.cursor,
+        browsingLevel: await trpc.getBrowsingLevel(),
       });
       const items = data.items ?? [];
       const text =
@@ -213,11 +218,13 @@ export const browseTools: ToolModule = (reg) => {
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (args, { rest, config }) => {
+    async (args, { rest, trpc, config }) => {
+      const browsingLevel = await trpc.getBrowsingLevel();
       const results = await mapWithConcurrency(args.ids, MAX_CONCURRENCY, async (id) => {
         const data = await rest.get<{ items?: ImageLite[] }>('/images', {
           imageId: id,
           withMeta: true,
+          browsingLevel,
         });
         const item = data.items?.[0];
         if (!item) throw new Error(`No image found with ID ${id}`);

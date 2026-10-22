@@ -5,7 +5,8 @@ import { bearerFromHeader, AuthContext } from '../src/client/auth.js';
 describe('parseConfig', () => {
   it('applies defaults when env is empty', () => {
     const c = parseConfig({});
-    expect(c.apiUrl).toBe('https://civitai.com');
+    expect(c.apiUrl).toBe('https://civitai.red');
+    expect(c.webUrl).toBe('https://civitai.red');
     expect(c.transport).toBe('http');
     expect(c.port).toBe(3100);
     expect(c.apiKey).toBeUndefined();
@@ -16,10 +17,23 @@ describe('parseConfig', () => {
     expect(parseConfig({ CIVITAI_API_URL: 'http://civitai-app:3000/' }).apiUrl).toBe('http://civitai-app:3000');
   });
 
-  it('defaults webUrl to civitai.com independent of apiUrl', () => {
+  it('defaults webUrl to civitai.red independent of apiUrl', () => {
     // The bug: when apiUrl is an internal cluster service, webUrl must stay public.
     const c = parseConfig({ CIVITAI_API_URL: 'http://civitai-app:3000' });
     expect(c.apiUrl).toBe('http://civitai-app:3000');
+    expect(c.webUrl).toBe('https://civitai.red');
+  });
+
+  it('FORWARD_USER_BROWSING_LEVEL defaults off and parses true/1', () => {
+    expect(parseConfig({}).forwardUserBrowsingLevel).toBe(false);
+    expect(parseConfig({ FORWARD_USER_BROWSING_LEVEL: 'true' }).forwardUserBrowsingLevel).toBe(true);
+    expect(parseConfig({ FORWARD_USER_BROWSING_LEVEL: '1' }).forwardUserBrowsingLevel).toBe(true);
+    expect(parseConfig({ FORWARD_USER_BROWSING_LEVEL: 'false' }).forwardUserBrowsingLevel).toBe(false);
+  });
+
+  it('env still overrides the civitai.red defaults', () => {
+    const c = parseConfig({ CIVITAI_API_URL: 'https://civitai.com', CIVITAI_WEB_URL: 'https://civitai.com' });
+    expect(c.apiUrl).toBe('https://civitai.com');
     expect(c.webUrl).toBe('https://civitai.com');
   });
 

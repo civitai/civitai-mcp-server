@@ -149,6 +149,7 @@ Multi-stage build on `node:20-alpine`, runs as the non-root `node` user, with a
 See [`k8s/deployment.example.yaml`](k8s/deployment.example.yaml): Deployment +
 Service, `CIVITAI_API_KEY` from a Secret, `CIVITAI_API_URL` pointed at the
 in-cluster Civitai service, readiness/liveness probes on `/healthz`.
+`FORWARD_USER_BROWSING_LEVEL` requires a Cloudflare-fronted deployment.
 
 ### Local stdio (for agents that spawn a process)
 
@@ -171,13 +172,14 @@ in-cluster Civitai service, readiness/liveness probes on `/healthz`.
 
 | Var | Default | Purpose |
 |---|---|---|
-| `CIVITAI_API_URL` | `https://civitai.com` | Base URL for **all** API calls (REST + tRPC). In-cluster override, e.g. `http://civitai-app:3000`. |
-| `CIVITAI_WEB_URL` | `https://civitai.com` | Public website base for user-facing links in tool output (post/model/image/profile URLs). Distinct from `CIVITAI_API_URL`, which may point at an internal cluster service — links handed to users must stay public. The `civitai.com` default is correct for the hosted deployment; only override for `civitai.red` or a self-host on another domain. |
+| `CIVITAI_API_URL` | `https://civitai.red` | Base URL for **all** API calls (REST + tRPC). In-cluster override, e.g. `http://civitai-app:3000`. |
+| `CIVITAI_WEB_URL` | `https://civitai.red` | Public website base for user-facing links in tool output (post/model/image/profile URLs). Distinct from `CIVITAI_API_URL`, which may point at an internal cluster service — links handed to users must stay public. Override for `civitai.com` or a self-host on another domain. |
 | `CIVITAI_API_KEY` | — | Bearer token for authenticated calls. Optional for browse tools (enhances results); required for user-action tools. In HTTP mode it is the fallback when a request omits an `Authorization` header. |
 | `MCP_TRANSPORT` | `http` | `http` (Streamable HTTP) or `stdio` (local dev / desktop MCP clients). |
 | `PORT` | `3100` | HTTP listen port (http transport only). |
 | `PUBLIC_BASE_URL` | — | Optional canonical public base URL (e.g. `https://mcp.civitai.com`). When set, the advertised MCP endpoint in the landing page / `llms.txt` uses this instead of deriving it from the request `Host` header. Set it on the canonical hosted deployment so it always advertises its public address even behind proxies that don't forward `Host`/`X-Forwarded-*` reliably. Default: unset (Host-derived). |
 | `OAUTH_ENABLED` | `false` | Gates one-click OAuth (RFC 9728 protected-resource metadata + the 401 `WWW-Authenticate` challenge). Off = token-only mode. Turn on only once Civitai's OAuth dynamic client registration is live. See [OAuth one-click connect](#oauth-one-click-connect-opt-in-off-by-default). |
+| `FORWARD_USER_BROWSING_LEVEL` | `false` | When on, `search_models`, `search_images` and `get_image` use the calling user's own browsing level instead of the site default. Requires a Cloudflare-fronted deployment; see [Kubernetes](#kubernetes). |
 | `CIVITAI_USER_ID` | — | Optional: skip the `user.getToken` JWT round-trip for self-id resolution. |
 | `CIVITAI_UPLOAD_MAX_BYTES` | `10485760` | Max bytes accepted for an image fetched/decoded by `upload_image` (10 MB). Guards against memory exhaustion. |
 | `CIVITAI_UPLOAD_ALLOWED_HOSTS` | — | CSV allowlist of hostnames permitted for URL-based image uploads. When set, only these hosts (and subdomains) may be fetched. Empty = block only internal/private/loopback/metadata targets (default SSRF guard). |

@@ -24,7 +24,7 @@ Deployment target: same k8s cluster as the Civitai app deployment. The API desti
 
 | Var | Default | Purpose |
 |---|---|---|
-| `CIVITAI_API_URL` | `https://civitai.com` | Base URL for ALL API calls (REST + tRPC). In-cluster override, e.g. `http://civitai-app:3000` |
+| `CIVITAI_API_URL` | `https://civitai.red` | Base URL for ALL API calls (REST + tRPC). In-cluster override, e.g. `http://civitai-app:3000` |
 | `CIVITAI_API_KEY` | — | Bearer token for authenticated calls. Optional for browse tools (enhances results), required for user-action tools |
 | `MCP_TRANSPORT` | `http` | `http` (Streamable HTTP) or `stdio` |
 | `PORT` | `3100` | HTTP listen port |
@@ -156,7 +156,7 @@ run the authorization-code flow on first use. Two additive behaviors:
 
 - **`GET /.well-known/oauth-protected-resource`** (`src/lib/oauth.ts`): Protected
   Resource Metadata - `resource` = the `/mcp` endpoint, `authorization_servers` =
-  `CIVITAI_API_URL` (e.g. `https://civitai.com`), `scopes_supported` = the
+  `CIVITAI_API_URL` (e.g. `https://civitai.red`), `scopes_supported` = the
   canonical scope names (`user:read` … `models:write`),
   `bearer_methods_supported: ["header"]`.
 - **401 challenge** in `POST /mcp`: a `tools/call` for an auth-`required` tool

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { parse as devalueParse } from 'devalue';
 
 import type { AuthContext } from './auth.js';
@@ -113,6 +114,38 @@ export function unwrapTrpcResult(data: unknown): unknown {
   return resultData ?? data;
 }
 
+/** NsfwLevel bits PG | PG13 | R | X | XXX. Blocked (32) and above are never sent. */
+const ALL_BROWSING_LEVELS = 31;
+const PUBLIC_BROWSING_LEVEL = 1;
+
+/**
+ * The site's own rule for a user on civitai.red: their saved level when they
+ * have NSFW on, otherwise PG. Undefined when the user or either field is
+ * missing, so the caller sends no level and the site default applies.
+ */
+export function browsingLevelFromUser(user: unknown): number | undefined {
+  const u = user as { showNsfw?: unknown; browsingLevel?: unknown } | null | undefined;
+  if (typeof u?.showNsfw !== 'boolean' || typeof u.browsingLevel !== 'number') return undefined;
+  if (!u.showNsfw) return PUBLIC_BROWSING_LEVEL;
+  return (u.browsingLevel & ALL_BROWSING_LEVELS) || PUBLIC_BROWSING_LEVEL;
+}
+
+/** True only when the user allows every level: the sole case /api/v1/models may get nsfw=true. */
+export function allowsAllLevels(level: number | undefined): boolean {
+  return level !== undefined && (level & ALL_BROWSING_LEVELS) === ALL_BROWSING_LEVELS;
+}
+
+// Services are built per MCP request, so the cache lives at module scope, keyed
+// by a hash of the API key and forwarded headers. Only successful lookups are cached.
+const BROWSING_LEVEL_TTL_MS = 60_000;
+const BROWSING_LEVEL_CACHE_MAX = 1000;
+const browsingLevelCache = new Map<string, { level: number | undefined; expires: number }>();
+
+/** Test helper: clear the browsing-level cache. */
+export function resetBrowsingLevelCache(): void {
+  browsingLevelCache.clear();
+}
+
 export class TrpcClient {
   constructor(private readonly auth: AuthContext) {}
 
@@ -139,7 +172,10 @@ export class TrpcClient {
     const url =
       method === 'GET' ? `${base}?input=${encodeURIComponent(JSON.stringify(wrapped))}` : base;
 
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const headers: Record<string, string> = {
+      ...this.auth.regionHeaders,
+      'Content-Type': 'application/json',
+    };
     const key = this.auth.apiKey;
     if (key) headers['Authorization'] = `Bearer ${key}`;
 
@@ -165,6 +201,37 @@ export class TrpcClient {
       return this.call('user.getById', { id: Number(input) }, 'GET');
     }
     return this.call('user.getCreator', { username: String(input) }, 'GET');
+  }
+
+  /**
+   * The calling user's effective browsing level (see browsingLevelFromUser), or
+   * undefined with no caller key, no preference, or a failed lookup. Never
+   * throws: a search must run at the site default rather than fail or widen.
+   * An HTTP request on the env fallback key gets no level: that key is the
+   * deployment's account, whose preference is not the caller's. Requires
+   * FORWARD_USER_BROWSING_LEVEL and a Cloudflare-fronted request.
+   */
+  async getBrowsingLevel(): Promise<number | undefined> {
+    const key = this.auth.apiKey;
+    if (!key || !this.auth.keyIsCaller || !this.auth.regionKnown()) return undefined;
+    const cacheKey = createHash('sha256')
+      .update(JSON.stringify([key, this.auth.regionHeaders]))
+      .digest('hex');
+    const hit = browsingLevelCache.get(cacheKey);
+    if (hit && hit.expires > Date.now()) return hit.level;
+
+    let level: number | undefined;
+    try {
+      level = browsingLevelFromUser(await this.call('auth.getUser', undefined, 'GET'));
+    } catch {
+      return undefined;
+    }
+    browsingLevelCache.delete(cacheKey);
+    if (browsingLevelCache.size >= BROWSING_LEVEL_CACHE_MAX) {
+      browsingLevelCache.delete(browsingLevelCache.keys().next().value!);
+    }
+    browsingLevelCache.set(cacheKey, { level, expires: Date.now() + BROWSING_LEVEL_TTL_MS });
+    return level;
   }
 
   /** Resolve the signed-in user's id from the API key via the user.getToken JWT. */

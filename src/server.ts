@@ -4,8 +4,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import { z } from 'zod';
 import type { Config } from './config.js';
-import { bearerFromHeader } from './client/auth.js';
-import { buildServices, fail, type Services, type ToolResult } from './tools/helpers.js';
+import { servicesFromHeaders, fail, type Services, type ToolResult } from './tools/helpers.js';
 import type { ToolAuth, ToolCatalogEntry } from './lib/landing.js';
 
 import { browseTools } from './tools/browse.js';
@@ -98,12 +97,11 @@ export function createServer(config: Config): BuiltServer {
         annotations: toolConfig.annotations,
       },
       (async (args: unknown, extra: RequestHandlerExtra<never, never>): Promise<ToolResult> => {
-        // Resolve a per-request bearer from the HTTP request headers (if any).
+        // Resolve per-request auth from the HTTP request headers (if any).
         const headers = extra.requestInfo?.headers as
           | Record<string, string | string[] | undefined>
           | undefined;
-        const requestKey = bearerFromHeader(headers?.authorization ?? headers?.Authorization);
-        const services = buildServices(config, requestKey);
+        const services = servicesFromHeaders(config, headers);
         try {
           return await handlerFn(args as Parameters<typeof handlerFn>[0], services);
         } catch (err) {

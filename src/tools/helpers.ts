@@ -1,5 +1,5 @@
 import type { Config } from '../config.js';
-import { AuthContext } from '../client/auth.js';
+import { AuthContext, bearerFromHeader, regionHeadersFrom } from '../client/auth.js';
 import { RestClient } from '../client/rest.js';
 import { TrpcClient, TrpcError } from '../client/trpc.js';
 
@@ -12,14 +12,27 @@ export interface Services {
   trpc: TrpcClient;
 }
 
-export function buildServices(config: Config, requestKey?: string): Services {
-  const auth = new AuthContext(config, requestKey);
+export function buildServices(
+  config: Config,
+  requestKey?: string,
+  regionHeaders?: Record<string, string>
+): Services {
+  const auth = new AuthContext(config, requestKey, regionHeaders);
   return {
     config,
     auth,
     rest: new RestClient(auth),
     trpc: new TrpcClient(auth),
   };
+}
+
+/** Services for one MCP request, from its HTTP headers (undefined in stdio mode). */
+export function servicesFromHeaders(
+  config: Config,
+  headers: Record<string, string | string[] | undefined> | undefined
+): Services {
+  const requestKey = bearerFromHeader(headers?.authorization ?? headers?.Authorization);
+  return buildServices(config, requestKey, regionHeadersFrom(headers));
 }
 
 /** MCP tool result shape (subset we use). The index signature keeps it

@@ -123,7 +123,7 @@ describe('HTTP routes (OAuth enabled)', () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(typeof body.resource).toBe('string');
     expect((body.resource as string).endsWith('/mcp')).toBe(true);
-    expect(body.authorization_servers).toEqual(['https://civitai.com']);
+    expect(body.authorization_servers).toEqual(['https://civitai.red']);
     expect(Array.isArray(body.scopes_supported)).toBe(true);
     expect((body.scopes_supported as string[]).length).toBeGreaterThan(0);
     expect(body.bearer_methods_supported).toEqual(['header']);
