@@ -5,6 +5,8 @@ import {
   formatModelResult,
   formatModelDetail,
   formatVersionDetail,
+  versionDetail,
+  type VersionDetailLite,
   formatImageResult,
   formatImageDetail,
   modelAirUrns,
@@ -129,17 +131,20 @@ export const browseTools: ToolModule = (reg) => {
     },
     async (args, { rest, config }) => {
       const results = await mapWithConcurrency(args.ids, MAX_CONCURRENCY, (id) =>
-        rest.get<Parameters<typeof formatVersionDetail>[0]>(`/model-versions/${id}`)
+        rest.get<VersionDetailLite>(`/model-versions/${id}`)
       );
       const blocks: string[] = [];
+      const versions: ReturnType<typeof versionDetail>[] = [];
       const errors: Array<{ id: number; error: string }> = [];
       for (const r of results) {
-        if (r.ok) blocks.push(formatVersionDetail(r.value, config.webUrl));
-        else errors.push({ id: r.item, error: r.error });
+        if (r.ok) {
+          blocks.push(formatVersionDetail(r.value, config.webUrl));
+          versions.push(versionDetail(r.value));
+        } else errors.push({ id: r.item, error: r.error });
       }
       let text = blocks.join('\n\n' + '='.repeat(50) + '\n\n');
       if (errors.length) text += `\n\nFailed: ${errors.map((e) => `${e.id} (${e.error})`).join(', ')}`;
-      return ok(text || 'No versions fetched.', { errors });
+      return ok(text || 'No versions fetched.', { versions, errors });
     }
   );
 
