@@ -24,6 +24,8 @@ interface ChatMember {
   userId?: number;
   user?: { id?: number; username?: string };
   isOwner?: boolean;
+  /** ChatMemberStatus: Invited | Joined | Ignored | Left | Kicked. */
+  status?: string;
 }
 interface ChatRow {
   id: number;
@@ -56,16 +58,32 @@ export const chatTools: ToolModule = (reg) => {
         undefined,
         'GET'
       );
-      const chats = Array.isArray(res) ? res : (res.items ?? []);
+      const chats = Array.isArray(res) ? res : (res?.items ?? []);
       const lines = chats.map((c) => {
         const names = (c.chatMembers ?? [])
-          .map((m) => m.user?.username ?? `user#${m.userId ?? m.user?.id}`)
+          .map((m) => {
+            const name = m.user?.username ?? `user#${m.userId ?? m.user?.id}`;
+            // Members who left, were kicked or never joined are still listed by chat.getAllByUser.
+            return m.status && m.status !== 'Joined' ? `${name} (${m.status})` : name;
+          })
           .join(', ');
         return `Chat #${c.id}: ${names || '(no members)'}`;
       });
       return ok((lines.join('\n') || 'No chats.') + `\n\n(${chats.length} chat(s))`, {
         count: chats.length,
-        chats: chats.map((c) => ({ id: c.id, members: c.chatMembers })),
+        // Project rather than passing chatMembers through. Each raw member carries a
+        // full nested `user` with profilePicture (metadata, hash, dimensions) and
+        // cosmetics arrays — ~20k characters for 18 chats, almost all of it profile
+        // decoration this tool never claimed to return.
+        chats: chats.map((c) => ({
+          id: c.id,
+          members: (c.chatMembers ?? []).map((m) => ({
+            userId: m.userId ?? m.user?.id ?? null,
+            username: m.user?.username ?? null,
+            isOwner: m.isOwner ?? null,
+            status: m.status ?? null,
+          })),
+        })),
       });
     }
   );
