@@ -11,9 +11,10 @@ describe('createServer', () => {
   // Composite-endpoint rewire split chat read tools into mark_chat_read (per-chat)
   // + mark_all_chats_read (blanket) => 53 total.
   // Platform feedback adds 2: send_platform_feedback, get_platform_feedback_status => 55.
-  it('registers the full tool catalog (55 tools)', () => {
+  // list_articles => 56.
+  it('registers the full tool catalog (56 tools)', () => {
     const { toolCount } = createServer(parseConfig({}));
-    expect(toolCount).toBe(55);
+    expect(toolCount).toBe(56);
   });
 });
 
