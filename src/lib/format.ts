@@ -255,6 +255,40 @@ export function formatImageDetail(img: ImageLite, siteUrl: string): string {
   return lines.join('\n');
 }
 
+/** What formatImageDetail prints, as structuredContent (meta minus blobs like the ComfyUI workflow). */
+export function imageDetail(img: ImageLite) {
+  const { id, url, width, height, type, username, createdAt, nsfwLevel, baseModel, postId, modelVersionIds, stats } = img;
+  const m = img.meta;
+  return {
+    id,
+    url,
+    width,
+    height,
+    type,
+    username,
+    createdAt,
+    nsfwLevel,
+    baseModel,
+    postId,
+    modelVersionIds,
+    stats,
+    meta: m && {
+      prompt: m.prompt,
+      negativePrompt: m.negativePrompt,
+      sampler: m.sampler,
+      steps: m.steps,
+      cfgScale: m.cfgScale,
+      seed: m.seed,
+      model: m.Model,
+      resources: m.civitaiResources?.map((r) => ({
+        type: r.type,
+        modelVersionId: r.modelVersionId ?? r.versionId,
+        weight: r.weight,
+      })),
+    },
+  };
+}
+
 /** Compact image search result. */
 export function formatImageResult(img: ImageLite, index: number): string {
   const stats = img.stats ?? {};
