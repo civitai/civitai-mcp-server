@@ -41,7 +41,9 @@ export interface ModelVersionLite {
   createdAt?: string;
   publishedAt?: string;
   trainedWords?: string[];
-  files?: Array<{ name?: string; primary?: boolean; sizeKB?: number; metadata?: { format?: string } }>;
+  /** civitai's own AIR for this version; /model-versions/:id sends it, /models does not. */
+  air?: string;
+  files?: Array<{ name?: string; type?: string; primary?: boolean; sizeKB?: number; metadata?: { format?: string } }>;
   stats?: { downloadCount?: number; thumbsUpCount?: number };
   images?: Array<{ url?: string; width?: number; height?: number }>;
 }
@@ -64,16 +66,23 @@ function tagNames(tags: ModelLite['tags']): string[] {
   return tags.map((t) => (typeof t === 'string' ? t : t.name ?? '')).filter(Boolean);
 }
 
+function primaryFile(v: ModelVersionLite) {
+  return v.files?.find((f) => f.primary) ?? v.files?.[0];
+}
+
+/** A version's AIR: the one civitai sent, else built the way civitai builds it. */
+export function versionAir(v: ModelVersionLite, modelType: string | undefined, modelId: number): string | null {
+  return (
+    v.air ??
+    buildAir({ modelType, baseModel: v.baseModel, modelId, versionId: v.id, fileType: primaryFile(v)?.type })
+  );
+}
+
 /** Attach an AIR URN to a model's latest version (or each version). */
 export function modelAirUrns(model: ModelLite): Array<{ versionId: number; air: string }> {
   const out: Array<{ versionId: number; air: string }> = [];
   for (const v of model.modelVersions ?? []) {
-    const air = buildAir({
-      modelType: model.type,
-      baseModel: v.baseModel,
-      modelId: model.id,
-      versionId: v.id,
-    });
+    const air = versionAir(v, model.type, model.id);
     if (air) out.push({ versionId: v.id, air });
   }
   return out;
@@ -102,12 +111,7 @@ export function formatModelResult(model: ModelLite, index: number, siteUrl: stri
   if (latest) {
     lines.push(`   Latest: ${latest.name} (Version ID: ${latest.id})`);
     if (latest.trainedWords?.length) lines.push(`   Triggers: ${latest.trainedWords.join(', ')}`);
-    const air = buildAir({
-      modelType: model.type,
-      baseModel: latest.baseModel,
-      modelId: model.id,
-      versionId: latest.id,
-    });
+    const air = versionAir(latest, model.type, model.id);
     if (air) lines.push(`   AIR: ${air}`);
   }
   const tags = tagNames(model.tags);
@@ -138,17 +142,12 @@ export function formatModelDetail(model: ModelLite, siteUrl: string): string {
 
   lines.push(`## Versions (${versions.length})`);
   for (const v of versions.slice(0, 10)) {
-    const air = buildAir({
-      modelType: model.type,
-      baseModel: v.baseModel,
-      modelId: model.id,
-      versionId: v.id,
-    });
+    const air = versionAir(v, model.type, model.id);
     lines.push(`  - ${v.name} (Version ID: ${v.id})`);
     lines.push(`    Base: ${v.baseModel ?? 'Unknown'}  |  Created: ${v.createdAt?.slice(0, 10) ?? 'N/A'}`);
     if (air) lines.push(`    AIR: ${air}`);
     if (v.trainedWords?.length) lines.push(`    Triggers: ${v.trainedWords.join(', ')}`);
-    const primary = v.files?.find((f) => f.primary) ?? v.files?.[0];
+    const primary = primaryFile(v);
     if (primary) {
       lines.push(
         `    File: ${primary.name} (${((primary.sizeKB ?? 0) / 1024).toFixed(0)} MB, ${
@@ -174,12 +173,7 @@ export function formatVersionDetail(
     `URL: ${siteUrl}/models/${v.modelId}?modelVersionId=${v.id}`,
     '',
   ];
-  const air = buildAir({
-    modelType: v.model?.type,
-    baseModel: v.baseModel,
-    modelId: v.modelId ?? 0,
-    versionId: v.id,
-  });
+  const air = versionAir(v, v.model?.type, v.modelId ?? 0);
   if (air) lines.push(`AIR: ${air}`, '');
   if (v.trainedWords?.length) lines.push(`Triggers: ${v.trainedWords.join(', ')}`, '');
   if (v.description) lines.push(`Description: ${truncate(stripHtml(v.description), 300)}`, '');
