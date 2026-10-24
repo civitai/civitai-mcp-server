@@ -292,6 +292,7 @@ export const commentTools: ToolModule = (reg) => {
     },
     async (args, services) => {
       const c = await services.trpc.call<CommentRow>('commentv2.getSingle', { id: args.id }, 'GET');
+      if (!c) return ok(`No comment found with id ${args.id}.`, { id: args.id, found: false });
       return ok(formatComment(c, '', 0), { id: c.id, content: stripHtml(c.content) });
     }
   );

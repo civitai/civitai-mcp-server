@@ -152,6 +152,14 @@ describe('send_platform_feedback wire shape', () => {
         'To check on it later, call get_platform_feedback_status with refs: ["5123-3f9a01bc"].'
     );
   });
+
+  it('a null result is an error, never "Sent. Ref: undefined"', async () => {
+    fakeServer(() => trpcOk(null));
+    const res = await send({ message: 'submit hangs', about: 'cli' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toContain('not confirmed');
+    expect(res.content[0]!.text).not.toContain('Ref: undefined');
+  });
 });
 
 describe('what the zod schema cannot see', () => {

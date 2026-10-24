@@ -116,6 +116,8 @@ export const platformFeedbackTools: ToolModule = (reg) => {
         services.auth.requireKey();
         const { input, excerptClipped } = buildPlatformFeedbackInput(args, SERVER_VERSION);
         const res = await services.trpc.call<PlatformFeedbackCreateResult>(PLATFORM_FEEDBACK_CREATE, input, 'POST');
+        // No result means no ref: "Sent. Ref: undefined" would claim a report nobody can look up.
+        if (!res?.ref) throw new Error('platformFeedback.create returned no result, so the report was not confirmed.');
 
         const lines = [
           res.duplicate

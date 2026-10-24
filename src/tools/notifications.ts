@@ -66,7 +66,7 @@ export const notificationTools: ToolModule = (reg) => {
         nextCursor?: string | Date | null;
       }>('notification.getAllByUser', input, 'GET', { cursor: ['Date'] });
 
-      const items = res.items ?? res.notifications ?? [];
+      const items = res?.items ?? res?.notifications ?? [];
       const lines = items.map((n) => {
         const when = n.createdAt ? new Date(n.createdAt).toISOString().slice(0, 16).replace('T', ' ') : '';
         const flag = n.read ? '' : ' [UNREAD]';
@@ -76,7 +76,7 @@ export const notificationTools: ToolModule = (reg) => {
       // args.cursor, so it has to be the same string whichever pool served the
       // call - Date.toString() would drop the milliseconds a createdAt-keyed
       // cursor needs. Same rule as every other date field, so same helper.
-      const nextCursor = displayDate(res.nextCursor) ?? null;
+      const nextCursor = displayDate(res?.nextCursor) ?? null;
       return ok(
         (lines.join('\n') || 'No notifications.') +
           (nextCursor ? `\n\nMore available — nextCursor: ${nextCursor}` : ''),
