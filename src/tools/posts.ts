@@ -145,6 +145,8 @@ export const postTools: ToolModule = (reg) => {
       description: 'Fetch a post by ID (wraps post.get): title, publishedAt, image count, author.',
       inputSchema: { id: z.number().int().describe('Post ID') },
       annotations: { readOnlyHint: true },
+      // Anonymous read: never calls requireKey(); a key only widens what is visible.
+      auth: 'public',
     },
     async (args, services) => {
       const post = await services.trpc.call<PostRow | null>('post.get', { id: args.id }, 'GET');

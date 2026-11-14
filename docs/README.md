@@ -1,6 +1,7 @@
 # docs/
 
-Design and planning notes for the Civitai MCP server.
+Historical design and planning notes for the Civitai MCP server. They are not
+maintained and may not match the current code.
 
 - [PLAN.md](PLAN.md) - original implementation plan (architecture, ported API knowledge, tool design).
 - [COMMUNITY-GAPS.md](COMMUNITY-GAPS.md) - gap analysis mapping Civitai community actions to MCP tools.

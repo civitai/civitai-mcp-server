@@ -204,6 +204,8 @@ export const articleTools: ToolModule = (reg) => {
         id: z.number().int().describe('Article ID'),
       },
       annotations: { readOnlyHint: true },
+      // Anonymous read: never calls requireKey(); a key only widens what is visible.
+      auth: 'public',
     },
     async (args, services) => {
       const current = await services.trpc.call<ArticleRow | null>(

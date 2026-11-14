@@ -33,9 +33,13 @@ interface ToolConfig<Shape extends ZodRawShape> {
   annotations?: ToolAnnotations;
   /**
    * Auth requirement. Drives the HTTP-layer OAuth 401 challenge in index.ts.
-   * When omitted it defaults from the tool's category (the Browse category is
-   * the only anonymous one). `required` tools call `requireKey()` internally;
-   * tagging them lets the HTTP layer challenge BEFORE the JSON-RPC layer so MCP
+   * When omitted it defaults from the tool's category: Browse tools are
+   * `public`, every other category `required`. The default is only a guess
+   * from the category; it is not derived from the handler. A tool outside
+   * Browse whose handler never calls `requireKey()` (an anonymous read such as
+   * `get_post`) must set `auth: 'public'` itself, or the HTTP layer would
+   * challenge a call that would have succeeded without a key. Tagging a tool
+   * `required` lets the HTTP layer challenge BEFORE the JSON-RPC layer, so MCP
    * clients see a real 401 + WWW-Authenticate and can start the OAuth flow.
    */
   auth?: ToolAuth;
@@ -75,8 +79,7 @@ export function createServer(config: Config): BuiltServer {
 
   const reg: Registrar = (name, toolConfig, handlerFn) => {
     toolCount++;
-    // Default: Browse tools are public, everything else needs a bearer. A tool
-    // may override explicitly via `auth` in its config.
+    // Default from the category (see ToolConfig.auth); an explicit `auth` wins.
     const auth: ToolAuth =
       toolConfig.auth ?? (currentCategory === PUBLIC_CATEGORY ? 'public' : 'required');
     catalog.push({

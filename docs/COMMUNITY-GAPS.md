@@ -1,5 +1,9 @@
 # Community-Participation Gap Analysis
 
+> **Historical design note.** Written while the server was being planned and built; it is not
+> maintained and may not match the current code. The live tool list is the README
+> [Tool catalog](../README.md#tool-catalog), generated from the tool registry.
+
 What the MCP server needs to add so an AI agent can be a **full participant** in the Civitai
 community — doing what a normal signed-in human does on the site.
 
@@ -64,7 +68,7 @@ client wraps it.
 ## P0 — Essential for community participation
 
 > **STATUS (Phase 2 shipped + composite-endpoint rewire):** All 9 P0 capability
-> groups are implemented as MCP tools (53 tools total). Per-group tool names below.
+> groups are implemented as MCP tools (the tool count has grown since; see the README). Per-group tool names below.
 > One procedure was confirmed `blockApiKeys:true` and deliberately NOT wrapped:
 > `bounty.upsert` (we ship `bounty.create`/`bounty.update` instead). `buzz.tipUser`
 > remains unshipped for the same reason (no tip tool).
