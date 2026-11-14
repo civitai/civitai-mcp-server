@@ -37,8 +37,8 @@ pnpm inspector
   from the live tool registry (`createServer(config).catalog`; see
   `src/lib/landing.ts` and `src/lib/readme-catalog.ts`). Don't hand-edit tool
   lists: run `pnpm readme:catalog` after changing a tool's name, description,
-  category, annotations or `auth`. CI runs `pnpm readme:check` and fails when
-  the README is stale.
+  category, annotations or `auth`. `pnpm test` (`test/readme-catalog.test.ts`)
+  fails when the README is stale; `pnpm readme:check` runs the same check alone.
 - Add or update tests for any behavior change.
 
 ## Adding a tool

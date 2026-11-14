@@ -6,7 +6,6 @@ import { parseConfig } from '../src/config.js';
 import { buildServices, type Services, type ToolResult } from '../src/tools/helpers.js';
 import { postTools } from '../src/tools/posts.js';
 import { articleTools } from '../src/tools/articles.js';
-import { commentTools } from '../src/tools/comments.js';
 
 /**
  * The `auth` tag drives the HTTP-layer OAuth 401 challenge, so a read tool
@@ -26,8 +25,6 @@ const PUBLIC_TOOLS = [
   'list_enums',
   'get_post',
   'get_article',
-  'list_comments',
-  'get_comment',
 ];
 
 describe('tool auth tags', () => {
@@ -48,14 +45,12 @@ function capture(mod: ToolModule): Map<string, { schema: ZodRawShape; handler: H
   return tools;
 }
 
-const handlers = new Map([...capture(postTools), ...capture(articleTools), ...capture(commentTools)]);
+const handlers = new Map([...capture(postTools), ...capture(articleTools)]);
 
 /** Canned upstream rows, enough for each handler to format a result. */
 const UPSTREAM: Record<string, unknown> = {
   'post.get': { id: 5, title: 'A post', publishedAt: null, user: { id: 1, username: 'u' } },
   'article.getById': { id: 6, title: 'An article', status: 'Published', publishedAt: null, tags: [] },
-  'commentv2.getInfinite': { comments: [], nextCursor: null },
-  'commentv2.getSingle': { id: 7, createdAt: '2026-01-02T03:04:05.000Z', content: '<p>hi</p>', user: { id: 1, username: 'u' }, reactions: [] },
 };
 
 afterEach(() => vi.restoreAllMocks());
@@ -64,8 +59,6 @@ describe('reads outside Browse run without an API key', () => {
   it.each([
     ['get_post', { id: 5 }],
     ['get_article', { id: 6 }],
-    ['list_comments', { entityType: 'image', entityId: 8 }],
-    ['get_comment', { id: 7 }],
   ])('%s succeeds with no key', async (name, args) => {
     const services = buildServices(parseConfig({ CIVITAI_API_URL: 'https://x.test' }));
     expect(services.auth.hasKey()).toBe(false);

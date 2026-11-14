@@ -2,7 +2,8 @@
  * Regenerate the README tool catalog from the live tool registry.
  *
  *   pnpm readme:catalog   rewrite README.md in place
- *   pnpm readme:check     exit 1 if README.md is stale (CI runs this)
+ *   pnpm readme:check     exit 1 if README.md is stale (CI's `pnpm test` runs the same
+ *                         check in test/readme-catalog.test.ts)
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

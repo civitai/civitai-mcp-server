@@ -206,12 +206,12 @@ tRPC `zodError` validation details are surfaced).
 The tables below are generated from the tool registry
 (`createServer(config).catalog`), the same list the landing page and `llms.txt`
 render. Don't edit them by hand: change the tool registration, then run
-`pnpm readme:catalog`. CI runs `pnpm readme:check`, which fails when this
-section differs from the registry.
+`pnpm readme:catalog`. `pnpm test` fails when this section differs from the
+registry.
 
 <!-- BEGIN GENERATED TOOL CATALOG: edit the tool registrations, then run `pnpm readme:catalog` -->
 
-55 tools in 15 categories. 11 work without an API key (Auth `public`); the rest need one (Auth `required`).
+55 tools in 15 categories. 9 work without an API key (Auth `public`); the rest need one (Auth `required`).
 
 ### Browse (no auth required)
 
@@ -260,8 +260,8 @@ section differs from the registry.
 
 | Tool | Auth | Hints | Description |
 |---|---|---|---|
-| `list_comments` | public | read-only | List comments on an entity (article, image, post, model, etc). Follows pagination so whole threads are returned (not just the first page). Recurses into replies up to `depth` levels (replies are comments whose parent entity is comment:<parentId>); a model discussion has one reply level. To bound the worst-case fan-out, a single call fetches at most 500 comments total; when that ceiling is hit the result is marked truncated. Bodies truncated to 280 chars unless includeFull. Shows aggregated reactions, pin/hidden flags. |
-| `get_comment` | public | read-only | Fetch a single comment with its full, uncapped body. |
+| `list_comments` | required | read-only | List comments on an entity (article, image, post, model, etc). Follows pagination so whole threads are returned (not just the first page). Recurses into replies up to `depth` levels (replies are comments whose parent entity is comment:<parentId>); a model discussion has one reply level. To bound the worst-case fan-out, a single call fetches at most 500 comments total; when that ceiling is hit the result is marked truncated. Bodies truncated to 280 chars unless includeFull. Shows aggregated reactions, pin/hidden flags. |
+| `get_comment` | required | read-only | Fetch a single comment with its full, uncapped body. |
 | `post_comment` | required |  | Post a comment on an entity, or reply to an existing comment. To reply, pass parentCommentId (the reply is created as a comment on entity comment:<parentId>). Markdown is converted to the restricted comment HTML (p, br, strong, em, a). |
 | `edit_comment` | required |  | Edit a comment you own. The API requires the parent entity on every upsert, so pass the comment's entityType + entityId (for a reply, entityType=comment and entityId=parent comment ID). |
 | `delete_comment` | required | destructive | Delete a comment you own (or any comment, if moderator). |

@@ -221,8 +221,6 @@ export const commentTools: ToolModule = (reg) => {
         includeFull: z.boolean().default(false).describe('Show full bodies instead of truncating'),
       },
       annotations: { readOnlyHint: true },
-      // Anonymous read: never calls requireKey().
-      auth: 'public',
     },
     async (args, services) => {
       const cap = args.includeFull ? 0 : 280;
@@ -291,8 +289,6 @@ export const commentTools: ToolModule = (reg) => {
       description: 'Fetch a single comment with its full, uncapped body.',
       inputSchema: { id: z.number().int().describe('Comment ID') },
       annotations: { readOnlyHint: true },
-      // Anonymous read: never calls requireKey().
-      auth: 'public',
     },
     async (args, services) => {
       const c = await services.trpc.call<CommentRow>('commentv2.getSingle', { id: args.id }, 'GET');
