@@ -230,7 +230,7 @@ section differs from the registry.
 | Tool | Auth | Hints | Description |
 |---|---|---|---|
 | `create_post` | required |  | Create a Civitai image post and attach images in order. This is the primary way to share creative work. Wraps the composite `post.createWithImages` endpoint in ONE atomic call: the server creates the post, attaches every image (in the given order), and optionally publishes — handling cleanup itself if any part fails. Each image is supplied by a pre-uploaded UUID or a URL (uploaded automatically first). Set publish=true to publish immediately (default false leaves it as a draft you can publish later with publish_post). Requires an onboarded, non-muted account and the MediaWrite scope (a Full API key works). |
-| `get_post` | public | read-only | Fetch a post by ID (wraps post.get): title, publishedAt, image count, author. |
+| `get_post` | public | read-only | Fetch a post by its ID (wraps post.get): title, publishedAt, image count, author. |
 | `publish_post` | required |  | Publish a draft post by setting publishedAt to now via post.update (with the required superjson Date hint). Idempotent-ish: re-publishing simply re-stamps publishedAt. Requires an onboarded account (post.update is verified). |
 | `delete_post` | required | destructive | Delete a post you own (or any post, if moderator). Wraps post.delete. |
 
