@@ -26,7 +26,8 @@
  *
  * AUTH
  * ----
- * Browse/read tools work with no key. User-action tools need one: set
+ * Only the tools tagged `public` (the REST-backed Browse tools) work with no
+ * key; every other tool, reads included, needs one: set
  * `CIVITAI_API_KEY` in the environment and it is sent as
  * `Authorization: Bearer <key>`. Without it, auth-required tools return a clear
  * "set CIVITAI_API_KEY" error, which this CLI surfaces verbatim.
@@ -318,8 +319,8 @@ Options:
 
 Config (env):
   MCP_URL              MCP endpoint (default: ${DEFAULT_MCP_URL})
-  CIVITAI_API_KEY      Bearer token. Browse/read tools work without it;
-                       user-action tools require it.
+  CIVITAI_API_KEY      Bearer token. Only the public Browse tools work without
+                       it; every other tool, reads included, requires it.
 
 Get an API key at https://civitai.com/user/account`;
 
