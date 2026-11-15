@@ -47,6 +47,10 @@ pnpm inspector
    `src/tools/*.ts` module (or a new module wired into `src/server.ts`).
 2. Mark read-only tools with `annotations: { readOnlyHint: true }` and
    destructive ones with `destructiveHint: true`.
+   Tag a tool `auth: 'public'` only if it works with no key: Civitai's REST
+   `/api/v1` answers anonymous callers, its tRPC API answers them with 401.
+   `test/tool-auth.test.ts` runs every public tool against that anonymous
+   upstream and pins the public set.
 3. Run `pnpm readme:catalog` to regenerate the README tool catalog, and commit
    the result.
 4. Add tests.

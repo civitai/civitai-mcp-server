@@ -95,8 +95,8 @@ node mcp-cli.mjs list
 node mcp-cli.mjs call search_models '{"query":"anime","type":"Checkpoint"}'
 ```
 
-Set `CIVITAI_API_KEY` in your environment for user-action tools (browse/read
-tools work without it). The pulled script defaults to the server it came from;
+Set `CIVITAI_API_KEY` in your environment for every tool outside Browse (the
+Browse tools work without it). The pulled script defaults to the server it came from;
 override with `MCP_URL` or `--url`. Add `--json` for the raw JSON-RPC result,
 `schema <tool>` to inspect a tool's input schema, or `--help` for usage.
 
@@ -211,7 +211,7 @@ registry.
 
 <!-- BEGIN GENERATED TOOL CATALOG: edit the tool registrations, then run `pnpm readme:catalog` -->
 
-55 tools in 15 categories. 9 work without an API key (Auth `public`); the rest need one (Auth `required`).
+55 tools in 15 categories. 7 work without an API key (Auth `public`); the rest need one (Auth `required`).
 
 ### Browse (no auth required)
 
@@ -230,7 +230,7 @@ registry.
 | Tool | Auth | Hints | Description |
 |---|---|---|---|
 | `create_post` | required |  | Create a Civitai image post and attach images in order. This is the primary way to share creative work. Wraps the composite `post.createWithImages` endpoint in ONE atomic call: the server creates the post, attaches every image (in the given order), and optionally publishes — handling cleanup itself if any part fails. Each image is supplied by a pre-uploaded UUID or a URL (uploaded automatically first). Set publish=true to publish immediately (default false leaves it as a draft you can publish later with publish_post). Requires an onboarded, non-muted account and the MediaWrite scope (a Full API key works). |
-| `get_post` | public | read-only | Fetch a post by ID (wraps post.get): title, publishedAt, image count, author. |
+| `get_post` | required | read-only | Fetch a post by ID (wraps post.get): title, publishedAt, image count, author. |
 | `publish_post` | required |  | Publish a draft post by setting publishedAt to now via post.update (with the required superjson Date hint). Idempotent-ish: re-publishing simply re-stamps publishedAt. Requires an onboarded account (post.update is verified). |
 | `delete_post` | required | destructive | Delete a post you own (or any post, if moderator). Wraps post.delete. |
 
@@ -254,7 +254,7 @@ registry.
 | `upsert_article` | required |  | Create (omit id) or update (pass id) a Civitai article. Markdown content is converted to HTML server-side-safe. Optionally attach a cover by UUID (coverImageUuid) or by URL (coverImageUrl, uploaded automatically). Note: article.upsert requires title+content on every call. To flip publish state use publish_article. |
 | `publish_article` | required |  | Publish a draft article. Fetches the current article, rebuilds the full upsert payload (so nothing regresses), and sets status=Published + publishedAt=now with the superjson Date hint required for the date to deserialize server-side. Idempotent: a no-op on already-published articles. |
 | `unpublish_article` | required | destructive | Unpublish a published article via the dedicated article.unpublish endpoint. |
-| `get_article` | public | read-only | Fetch an article by ID (wraps article.getById): title, status, publishedAt, tags, cover. |
+| `get_article` | required | read-only | Fetch an article by ID (wraps article.getById): title, status, publishedAt, tags, cover. |
 
 ### Comments
 
@@ -352,8 +352,11 @@ registry.
 - **API key:** create one at [civitai.com/user/account](https://civitai.com/user/account)
   and send it as `Authorization: Bearer <key>`. In HTTP mode the per-request
   header overrides any `CIVITAI_API_KEY` env fallback.
-- **Browse without a key:** all `search_*` / `get_*` browse tools work
-  unauthenticated (a key just enriches results).
+- **Browse without a key:** the Browse tools (the ones tagged `public` in the
+  catalog above) call REST `/api/v1` and work unauthenticated (a key just
+  enriches results). Every other tool, reads such as `get_post` and
+  `get_article` included, goes through Civitai's tRPC API, which rejects
+  anonymous callers with 401, so it needs a key.
 - **Onboarded, non-muted account:** most write actions are `verified` (requires
   onboarding) or `guarded` (also blocks muted users). A fresh agent account must
   finish onboarding first - use `complete_onboarding_step`. `whoami` reports the
@@ -395,7 +398,7 @@ Two behaviors back this:
 - **401 challenge** - a `tools/call` for an auth-`required` tool with no
   `Authorization: Bearer` is short-circuited at the HTTP layer with a 401 +
   challenge (instead of a deeper JSON-RPC `200 + isError` the client can't act
-  on). Browse/read tools stay anonymous; `initialize`, `tools/list`,
+  on). Browse tools stay anonymous; `initialize`, `tools/list`,
   `notifications/*`, and `ping` are never challenged. In a batch, if **any** call
   needs auth and no bearer is present, the whole request is challenged. The token
   is not validated here (presence is enough); a bad token surfaces as a tool

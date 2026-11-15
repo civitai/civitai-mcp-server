@@ -35,10 +35,13 @@ interface ToolConfig<Shape extends ZodRawShape> {
    * Auth requirement. Drives the HTTP-layer OAuth 401 challenge in index.ts.
    * When omitted it defaults from the tool's category: Browse tools are
    * `public`, every other category `required`. The default is only a guess
-   * from the category; it is not derived from the handler. A tool outside
-   * Browse whose handler never calls `requireKey()` (an anonymous read such as
-   * `get_post`) must set `auth: 'public'` itself, or the HTTP layer would
-   * challenge a call that would have succeeded without a key. Tagging a tool
+   * from the category; it is not derived from the handler. A tool is `public`
+   * only if its upstream calls succeed with no key: Civitai's REST `/api/v1`
+   * does, its tRPC surface does not (an anonymous tRPC call gets 401 "Please
+   * use the public API instead"), so a tRPC read such as `get_post` stays
+   * `required` even though its handler never calls `requireKey()`. A tool
+   * outside Browse that reaches REST alone must set `auth: 'public'` itself, or
+   * the HTTP layer would challenge a call that would have succeeded. Tagging a tool
    * `required` lets the HTTP layer challenge BEFORE the JSON-RPC layer, so MCP
    * clients see a real 401 + WWW-Authenticate and can start the OAuth flow.
    */
