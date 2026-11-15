@@ -217,7 +217,13 @@ export const commentTools: ToolModule = (reg) => {
           if (level === 0) shownTop++;
           lines.push(formatComment(c, indent, cap));
           if (level >= args.depth) continue;
-          await loadReplies(services, tree, id, args.sort, budget);
+          // One parent's refused or failed reply fetch must not fail the whole listing:
+          // show the comment, note its replies are unavailable, and keep going.
+          try {
+            await loadReplies(services, tree, id, args.sort, budget);
+          } catch {
+            lines.push(`${indent}  ↳ replies unavailable`);
+          }
           const replies = (tree.kids.get(id)?.ids ?? []).filter((r) => tree.byId.has(r));
           if (replies.length) {
             lines.push(`${indent}  ↳ ${replies.length} repl${replies.length === 1 ? 'y' : 'ies'}:`);

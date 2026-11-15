@@ -193,6 +193,77 @@ describe('list_comments on commentv3', () => {
   });
 });
 
+describe('list_comments edge cases', () => {
+  it('a refused reply fetch does not fail the listing', async () => {
+    const s = svc();
+    stub(s, (procedure, input) => {
+      if (procedure === 'commentv3.getSection') {
+        return {
+          comments: [row(1, 'first', { replyCount: 1 }), row(2, 'second', { replyCount: 1 })],
+          rootIds: [1, 2],
+          children: {},
+          nextCursor: null,
+        };
+      }
+      if (procedure === 'commentv3.getReplies' && input.parentId === 1) {
+        throw new Error('commentv3.getReplies: UNAUTHORIZED');
+      }
+      if (procedure === 'commentv3.getReplies' && input.parentId === 2) {
+        return { comments: [row(21, 'reply to second', { parentId: 2 })], rootIds: [], children: { 2: { ids: [21], nextCursor: null } } };
+      }
+      throw new Error(`unexpected ${procedure} ${JSON.stringify(input)}`);
+    });
+    const res = await run('list_comments', s, { entityType: 'model', entityId: 42 });
+    expect(res.isError).not.toBe(true);
+    const text = res.content[0]!.text;
+    // The failed parent still renders, with the note directly under it.
+    expect(text).toMatch(/#1 by user1[^\n]*\n {2}first\n\n {2}↳ replies unavailable/);
+    expect(text.match(/replies unavailable/g)).toHaveLength(1);
+    // The rest of the listing still returns.
+    expect(text).toContain('second');
+    expect(text).toContain('reply to second');
+    expect(res.structuredContent).toEqual({ topLevelCount: 2, truncated: false, maxComments: 500 });
+  });
+
+  it('a parent hidden from this viewer (empty getReplies page) is asked once, not paged to the limit', async () => {
+    const s = svc();
+    const calls = stub(s, (procedure) => {
+      if (procedure === 'commentv3.getSection') {
+        return { comments: [row(1, 'parent', { replyCount: 3 })], rootIds: [1], children: {}, nextCursor: null };
+      }
+      // A hidden parent: an empty page with no children entry for it.
+      if (procedure === 'commentv3.getReplies') return { comments: [], rootIds: [], children: {}, nextCursor: null };
+      throw new Error(`unexpected ${procedure}`);
+    });
+    const res = await run('list_comments', s, { entityType: 'model', entityId: 42 });
+    expect(calls.filter((c) => c.procedure === 'commentv3.getReplies')).toHaveLength(1);
+    expect(res.content[0]!.text).toContain('parent');
+    expect(res.content[0]!.text).not.toContain('↳');
+    expect(res.structuredContent).toEqual({ topLevelCount: 1, truncated: false, maxComments: 500 });
+  });
+
+  it('stops at the 500-comment ceiling and reports truncation', async () => {
+    const s = svc();
+    // 120 per page overshoots 500 (480 after four pages, 600 after five), so the
+    // ceiling, not a page boundary, decides where the listing stops.
+    const calls = stub(s, (procedure, input) => {
+      if (procedure !== 'commentv3.getSection') throw new Error(`unexpected ${procedure}`);
+      const start = input.cursor === undefined ? 0 : Number(input.cursor);
+      const comments = Array.from({ length: 120 }, (_, k) => row(start + k + 1, `c${start + k + 1}`));
+      return { comments, rootIds: comments.map((c) => c.id), children: {}, nextCursor: String(start + 120) };
+    });
+    const res = await run('list_comments', s, { entityType: 'model', entityId: 42, depth: 0 });
+    expect(calls.filter((c) => c.procedure === 'commentv3.getSection')).toHaveLength(5);
+    expect(res.structuredContent).toEqual({ topLevelCount: 500, truncated: true, maxComments: 500 });
+    const text = res.content[0]!.text;
+    expect(text).toContain('#500 by user500');
+    expect(text).not.toContain('#501 by');
+    expect(text).toContain(
+      '[results truncated at 500 comments — narrow entityId or reduce depth to see more]'
+    );
+  });
+});
+
 describe('get_comment on commentv3', () => {
   it('calls getThread with the comment and its entity', async () => {
     const s = svc();
