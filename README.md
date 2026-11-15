@@ -249,9 +249,9 @@ render the same list.
 |---|---|
 | `list_comments` | Whole thread via `commentv3.getSection` / `getReplies`, replies nested to `depth`, reaction counts. `entityType=comment` lists one comment's replies. |
 | `get_comment` | Single comment, uncapped body, via `commentv3.getThread`; needs the comment's `entityType` + `entityId`. |
-| `post_comment` | Post or reply (reply via `parentCommentId` to comment-entity chaining). |
+| `post_comment` | Post or reply (commentv3; pass the thread's entity, plus `parentCommentId` for a reply). |
 | `edit_comment` / `delete_comment` / `react_to_comment` | Edit, delete, toggle reaction. |
-| `pin_comment` / `lock_thread` | Moderator-gated upstream. |
+| `pin_comment` / `lock_thread` | Pin: the entity's owner or a moderator. Lock a whole comment section: moderators only. |
 
 ### Collections (auth - flag-gated `collections`)
 | Tool | Description |

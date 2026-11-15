@@ -4,23 +4,6 @@ import { ok, type Services } from './helpers.js';
 import { commentToHtml } from '../lib/markdown.js';
 import { stripHtml } from '../lib/format.js';
 
-/** Entity types the write tools (commentv2) take. */
-const ENTITY_TYPES = [
-  'article',
-  'image',
-  'post',
-  'model',
-  'review',
-  'question',
-  'answer',
-  'comment',
-  'bounty',
-  'bountyEntry',
-  'clubPost',
-  'challenge',
-  'comicChapter',
-] as const;
-
 /** The entities a commentv3 section belongs to: civitai's `CommentEntityType`. */
 const SECTION_TYPES = [
   'model',
@@ -296,38 +279,30 @@ export const commentTools: ToolModule = (reg) => {
     {
       title: 'Post comment or reply',
       description:
-        'Post a comment on an entity, or reply to an existing comment. To reply, pass parentCommentId (the reply is created as a comment on entity comment:<parentId>). Markdown is converted to the restricted comment HTML (p, br, strong, em, a).',
+        'Post a comment on an entity, or reply to an existing comment (wraps commentv3.create). Always pass the entity the thread is on (entityType + entityId); to reply, also pass parentCommentId, and the reply goes into the parent\'s thread. Markdown is converted to the restricted comment HTML (p, br, strong, em, a). Needs an onboarded, non-muted account and the SocialWrite scope.',
       inputSchema: {
-        entityType: z.enum(ENTITY_TYPES).optional().describe('Entity type (omit when replying via parentCommentId)'),
-        entityId: z.number().int().optional().describe('Entity ID (omit when replying via parentCommentId)'),
+        entityType: z.enum(SECTION_TYPES).describe('Entity the comment is on (for a reply, the entity of its thread)'),
+        entityId: z.number().int().positive().describe('Entity ID'),
         content: z.string().describe('Comment body in Markdown'),
-        parentCommentId: z.number().int().optional().describe('Reply to this comment (overrides entityType/entityId)'),
+        parentCommentId: z.number().int().positive().optional().describe('Reply to this comment'),
       },
       annotations: { readOnlyHint: false },
     },
     async (args, services) => {
       services.auth.requireKey();
-      const content = commentToHtml(args.content);
-      let entityType: string;
-      let entityId: number;
-      if (args.parentCommentId) {
-        entityType = 'comment';
-        entityId = args.parentCommentId;
-      } else {
-        if (!args.entityType || args.entityId === undefined)
-          throw new Error('Provide entityType + entityId, or parentCommentId for a reply');
-        entityType = args.entityType;
-        entityId = args.entityId;
-      }
-      const res = await services.trpc.call<{ id?: number }>('commentv2.upsert', {
-        entityType,
-        entityId,
-        content,
+      const input: Record<string, unknown> = {
+        entityType: args.entityType,
+        entityId: args.entityId,
+        content: commentToHtml(args.content),
+      };
+      if (args.parentCommentId !== undefined) input.parentId = args.parentCommentId;
+      const res = await services.trpc.call<{ id?: number }>('commentv3.create', input);
+      const isReply = args.parentCommentId !== undefined;
+      return ok(`${isReply ? 'Reply' : 'Comment'} posted. ID: ${res?.id ?? '(unknown)'}`, {
+        ok: true,
+        id: res?.id,
+        isReply,
       });
-      return ok(
-        `${args.parentCommentId ? 'Reply' : 'Comment'} posted. ID: ${res?.id ?? '(unknown)'}`,
-        { ok: true, id: res?.id, isReply: !!args.parentCommentId }
-      );
     }
   );
 
@@ -336,23 +311,16 @@ export const commentTools: ToolModule = (reg) => {
     {
       title: 'Edit comment',
       description:
-        'Edit a comment you own. The API requires the parent entity on every upsert, so pass the comment\'s entityType + entityId (for a reply, entityType=comment and entityId=parent comment ID).',
+        'Edit a comment you wrote, or any comment as a moderator (wraps commentv3.update). Markdown is converted to the restricted comment HTML. Needs an onboarded, non-muted account and the SocialWrite scope.',
       inputSchema: {
-        id: z.number().int().describe('Comment ID to edit'),
-        entityType: z.enum(ENTITY_TYPES).describe('Parent entity type'),
-        entityId: z.number().int().describe('Parent entity ID'),
+        id: z.number().int().positive().describe('Comment ID to edit'),
         content: z.string().describe('New body in Markdown'),
       },
       annotations: { readOnlyHint: false },
     },
     async (args, services) => {
       services.auth.requireKey();
-      await services.trpc.call('commentv2.upsert', {
-        id: args.id,
-        entityType: args.entityType,
-        entityId: args.entityId,
-        content: commentToHtml(args.content),
-      });
+      await services.trpc.call('commentv3.update', { id: args.id, content: commentToHtml(args.content) });
       return ok(`Comment ${args.id} updated.`, { ok: true, id: args.id });
     }
   );
@@ -361,13 +329,14 @@ export const commentTools: ToolModule = (reg) => {
     'delete_comment',
     {
       title: 'Delete comment',
-      description: 'Delete a comment you own (or any comment, if moderator).',
-      inputSchema: { id: z.number().int().describe('Comment ID to delete') },
+      description:
+        'Delete a comment you wrote, or any comment as a moderator (wraps commentv3.delete). A comment with replies stays as a [deleted] placeholder so its replies remain. Needs the SocialWrite scope.',
+      inputSchema: { id: z.number().int().positive().describe('Comment ID to delete') },
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async (args, services) => {
       services.auth.requireKey();
-      await services.trpc.call('commentv2.delete', { id: args.id });
+      await services.trpc.call('commentv3.delete', { id: args.id });
       return ok(`Comment ${args.id} deleted.`, { ok: true, id: args.id });
     }
   );
@@ -397,40 +366,45 @@ export const commentTools: ToolModule = (reg) => {
   reg(
     'pin_comment',
     {
-      title: 'Pin comment (moderator)',
-      description: 'Toggle the pinned state of a comment. Moderator-gated upstream.',
-      inputSchema: { id: z.number().int().describe('Comment ID') },
+      title: 'Pin comment',
+      description:
+        'Toggle the pinned state of a comment (wraps commentv3.togglePinned). Allowed for the owner of the entity the comment is on, and for moderators. Returns whether the comment is now pinned. Needs the SocialWrite scope.',
+      inputSchema: { id: z.number().int().positive().describe('Comment ID') },
       annotations: { readOnlyHint: false },
     },
     async (args, services) => {
       services.auth.requireKey();
-      await services.trpc.call('commentv2.togglePinned', { id: args.id });
-      return ok(`Toggled pin on comment ${args.id}.`, { ok: true, id: args.id });
+      const res = await services.trpc.call<{ id?: number; pinned?: boolean }>('commentv3.togglePinned', {
+        id: args.id,
+      });
+      const pinned = res?.pinned === true;
+      return ok(`${pinned ? 'Pinned' : 'Unpinned'} comment ${args.id}.`, { ok: true, id: args.id, pinned });
     }
   );
 
   reg(
     'lock_thread',
     {
-      title: 'Lock comment thread (moderator)',
-      description: 'Toggle the lock state of an entity\'s comment thread. Moderator-gated upstream.',
+      title: 'Lock comment section (moderator)',
+      description:
+        'Toggle the lock on an entity\'s whole comment section (wraps commentv3.toggleSectionLock); a locked section takes no new comments. Moderators only. Returns whether the section is now locked.',
       inputSchema: {
-        entityType: z.enum(ENTITY_TYPES).describe('Entity type'),
-        entityId: z.number().int().describe('Entity ID'),
+        entityType: z.enum(SECTION_TYPES).describe('Entity type'),
+        entityId: z.number().int().positive().describe('Entity ID'),
       },
       annotations: { readOnlyHint: false },
     },
     async (args, services) => {
       services.auth.requireKey();
-      await services.trpc.call('commentv2.toggleLockThread', {
+      const res = await services.trpc.call<{ locked?: boolean }>('commentv3.toggleSectionLock', {
         entityType: args.entityType,
         entityId: args.entityId,
       });
-      return ok(`Toggled thread lock on ${args.entityType}#${args.entityId}.`, {
-        ok: true,
-        entityType: args.entityType,
-        entityId: args.entityId,
-      });
+      const locked = res?.locked === true;
+      return ok(
+        `${locked ? 'Locked' : 'Unlocked'} the comment section on ${args.entityType}#${args.entityId}.`,
+        { ok: true, entityType: args.entityType, entityId: args.entityId, locked }
+      );
     }
   );
 };
