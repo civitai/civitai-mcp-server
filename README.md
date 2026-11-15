@@ -247,8 +247,8 @@ render the same list.
 ### Comments (auth)
 | Tool | Description |
 |---|---|
-| `list_comments` | Recursive thread fetch with per-comment reaction aggregation. |
-| `get_comment` | Single comment, uncapped body. |
+| `list_comments` | Whole thread via `commentv3.getSection` / `getReplies`, replies nested to `depth`, reaction counts. `entityType=comment` lists one comment's replies. |
+| `get_comment` | Single comment, uncapped body, via `commentv3.getThread`; needs the comment's `entityType` + `entityId`. |
 | `post_comment` | Post or reply (reply via `parentCommentId` to comment-entity chaining). |
 | `edit_comment` / `delete_comment` / `react_to_comment` | Edit, delete, toggle reaction. |
 | `pin_comment` / `lock_thread` | Moderator-gated upstream. |
