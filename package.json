@@ -36,6 +36,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "readme:catalog": "tsx scripts/readme-catalog.ts",
+    "readme:check": "tsx scripts/readme-catalog.ts --check",
     "inspector": "npx @modelcontextprotocol/inspector tsx src/index.ts"
   },
   "dependencies": {
