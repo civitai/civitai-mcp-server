@@ -260,14 +260,14 @@ registry.
 
 | Tool | Auth | Hints | Description |
 |---|---|---|---|
-| `list_comments` | required | read-only | List comments on an entity (article, image, post, model, etc). Follows pagination so whole threads are returned (not just the first page). Recurses into replies up to `depth` levels (replies are comments whose parent entity is comment:<parentId>); a model discussion has one reply level. To bound the worst-case fan-out, a single call fetches at most 500 comments total; when that ceiling is hit the result is marked truncated. Bodies truncated to 280 chars unless includeFull. Shows aggregated reactions, pin/hidden flags. |
-| `get_comment` | required | read-only | Fetch a single comment with its full, uncapped body. |
-| `post_comment` | required |  | Post a comment on an entity, or reply to an existing comment. To reply, pass parentCommentId (the reply is created as a comment on entity comment:<parentId>). Markdown is converted to the restricted comment HTML (p, br, strong, em, a). |
-| `edit_comment` | required |  | Edit a comment you own. The API requires the parent entity on every upsert, so pass the comment's entityType + entityId (for a reply, entityType=comment and entityId=parent comment ID). |
-| `delete_comment` | required | destructive | Delete a comment you own (or any comment, if moderator). |
+| `list_comments` | required | read-only | List the comments on an entity (model, image, post, article, review, bounty, etc.), or the replies to one comment (entityType=comment, entityId=the comment ID). Follows pagination so whole threads are returned, not just the first page, and nests replies up to `depth` levels. A single call shows at most 500 comments; past that the result is marked truncated. Bodies are truncated to 280 chars unless includeFull. Shows reaction counts and pin/hidden flags. |
+| `get_comment` | required | read-only | Fetch a single comment with its full, uncapped body. commentv3 looks a comment up within the entity it is on, so pass that entity too: for a reply, the entity of the thread it is in (not the parent comment). On a model, an old comment ID from a link or notification also works. |
+| `post_comment` | required |  | Post a comment on an entity, or reply to an existing comment (wraps commentv3.create). Always pass the entity the thread is on (entityType + entityId); to reply, also pass parentCommentId, and the reply goes into the parent's thread. Markdown is converted to the restricted comment HTML (p, br, strong, em, a). Needs an onboarded, non-muted account and the SocialWrite scope. |
+| `edit_comment` | required |  | Edit a comment you wrote, or any comment as a moderator (wraps commentv3.update). Markdown is converted to the restricted comment HTML. Needs an onboarded, non-muted account and the SocialWrite scope. |
+| `delete_comment` | required | destructive | Delete a comment you wrote, or any comment as a moderator (wraps commentv3.delete). A comment with replies stays as a [deleted] placeholder so its replies remain. Needs the SocialWrite scope. |
 | `react_to_comment` | required |  | Toggle a reaction on a comment (Like, Dislike, Laugh, Cry, Heart). Toggling the same reaction again removes it. |
-| `pin_comment` | required |  | Toggle the pinned state of a comment. Moderator-gated upstream. |
-| `lock_thread` | required |  | Toggle the lock state of an entity's comment thread. Moderator-gated upstream. |
+| `pin_comment` | required |  | Toggle the pinned state of a comment (wraps commentv3.togglePinned). Allowed for the owner of the entity the comment is on, and for moderators. Returns whether the comment is now pinned. Needs the SocialWrite scope. |
+| `lock_thread` | required |  | Toggle the lock on an entity's whole comment section (wraps commentv3.toggleSectionLock); a locked section takes no new comments. Moderators only. Returns whether the section is now locked. |
 
 ### Collections
 

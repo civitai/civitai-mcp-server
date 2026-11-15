@@ -4,20 +4,23 @@ import { ok, type Services } from './helpers.js';
 import { commentToHtml } from '../lib/markdown.js';
 import { stripHtml } from '../lib/format.js';
 
-const ENTITY_TYPES = [
-  'article',
+/** The entities a commentv3 section belongs to: civitai's `CommentEntityType`. */
+const SECTION_TYPES = [
+  'model',
   'image',
   'post',
-  'model',
+  'article',
   'review',
-  'question',
-  'answer',
-  'comment',
   'bounty',
   'bountyEntry',
-  'clubPost',
-  'challenge',
   'comicChapter',
+  'challenge',
+  'model3d',
+  'model3dReview',
+  'appListing',
+  'crucible',
+  'storyline',
+  'postText',
 ] as const;
 
 const REACTIONS = ['Like', 'Dislike', 'Laugh', 'Cry', 'Heart'] as const;
@@ -29,26 +32,47 @@ const REACTION_EMOJI: Record<string, string> = {
   Heart: '❤️',
 };
 
+/** A commentv3 comment (`CommentV3Item`), as much of it as these tools read. */
 interface CommentRow {
   id: number;
+  /** A placeholder for a deleted comment that still holds live replies. */
+  deleted?: boolean;
   content?: string;
-  createdAt?: string;
-  pinnedAt?: string | null;
+  createdAt?: string | Date;
+  pinnedAt?: string | Date | null;
   hidden?: boolean;
   reactionCount?: number;
-  reactions?: Array<{ reaction: string }>;
-  user?: { id?: number; username?: string };
+  /** Count per reaction type. */
+  reactions?: Record<string, number>;
+  /** Direct replies, loaded or not. */
+  replyCount?: number;
+  /** Null on a deleted comment. */
+  user?: { id?: number; username?: string | null } | null;
+}
+
+/** A commentv3 page: the comments, the top-level ids in order, and each parent's loaded replies. */
+interface CommentPage {
+  comments?: CommentRow[];
+  rootIds?: number[];
+  children?: Record<string, { ids?: number[]; nextCursor?: string | null }>;
+  nextCursor?: string | null;
 }
 
 function reactionSummary(c: CommentRow): string {
-  const counts: Record<string, number> = {};
-  for (const r of c.reactions ?? []) counts[r.reaction] = (counts[r.reaction] ?? 0) + 1;
-  const keys = Object.keys(counts);
-  if (keys.length === 0) return c.reactionCount ? `(${c.reactionCount} reactions)` : '';
-  return '(' + keys.sort().map((k) => `${REACTION_EMOJI[k] ?? k}${counts[k]}`).join(' ') + ')';
+  const counts = Object.entries(c.reactions ?? {}).filter(([, n]) => n > 0);
+  if (counts.length === 0) return c.reactionCount ? `(${c.reactionCount} reactions)` : '';
+  return (
+    '(' +
+    counts
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, n]) => `${REACTION_EMOJI[k] ?? k}${n}`)
+      .join(' ') +
+    ')'
+  );
 }
 
 function formatComment(c: CommentRow, indent: string, cap = 280): string {
+  if (c.deleted) return `${indent}#${c.id} [deleted]`;
   const author = c.user?.username ?? `user#${c.user?.id}`;
   const when = c.createdAt ? new Date(c.createdAt).toISOString().replace('T', ' ').slice(0, 16) : '';
   const pinned = c.pinnedAt ? ' [PINNED]' : '';
@@ -58,151 +82,92 @@ function formatComment(c: CommentRow, indent: string, cap = 280): string {
   return `${indent}#${c.id} by ${author}${pinned}${hidden} at ${when} ${reactionSummary(c)}\n${indent}  ${body}`.trimEnd();
 }
 
-/** Max pages to walk per entity before giving up (mirrors skill comment.mjs). */
+/** Max pages to walk per list (top-level, or one comment's replies) before giving up. */
 const MAX_PAGES = 50;
 
-/** Hard global ceiling on total comments fetched per list_comments call. */
+/** Hard global ceiling on total comments shown per list_comments call. */
 const MAX_COMMENTS_PER_CALL = 500;
 
+type Budget = { remaining: number; truncated: boolean };
+
 /**
- * Fetch ALL comments for an entity by threading commentv2.getInfinite's NUMERIC
- * nextCursor across pages. Without this the list caps at one page (default 20),
- * silently truncating threads and understating reply counts.
- *
- * `budget` is a shared per-call ceiling: when total fetched comments across the
- * whole list_comments call reach it, we stop early (and report truncation) so a
- * deep thread can't fan out to the 100^depth worst case.
+ * The comments seen so far in one list_comments call. commentv3 pages are flat: a
+ * section page carries top-level comments AND the replies it opened up front, tied
+ * together by `rootIds` and `children`. This merges every page into one tree.
  */
-async function fetchAllComments(
+class CommentTree {
+  readonly byId = new Map<number, CommentRow>();
+  readonly roots: number[] = [];
+  /** Loaded reply ids per parent, and the cursor for the parent's next reply page (null: none). */
+  readonly kids = new Map<number, { ids: number[]; nextCursor: string | null }>();
+
+  add(page: CommentPage | null | undefined): void {
+    for (const c of page?.comments ?? []) this.byId.set(c.id, c);
+    for (const id of page?.rootIds ?? []) if (!this.roots.includes(id)) this.roots.push(id);
+    for (const [key, entry] of Object.entries(page?.children ?? {})) {
+      const parentId = Number(key);
+      const known = this.kids.get(parentId) ?? { ids: [], nextCursor: null };
+      for (const id of entry.ids ?? []) if (!known.ids.includes(id)) known.ids.push(id);
+      known.nextCursor = entry.nextCursor ?? null;
+      this.kids.set(parentId, known);
+    }
+  }
+
+  /** Whether a parent has replies not loaded yet. A parent never seen is asked once. */
+  hasMore(parentId: number): boolean {
+    const known = this.kids.get(parentId);
+    if (known) return known.nextCursor !== null;
+    const parent = this.byId.get(parentId);
+    return parent ? (parent.replyCount ?? 0) > 0 : true;
+  }
+}
+
+/** Load every page of a section's top-level comments (`commentv3.getSection`). */
+async function loadSection(
   services: Services,
+  tree: CommentTree,
   entityType: string,
   entityId: number,
-  limit: number,
   sort: string,
-  budget: { remaining: number; truncated: boolean }
-): Promise<{ comments: CommentRow[]; nextCursor?: number }> {
-  const all: CommentRow[] = [];
-  let cursor: number | undefined;
+  budget: Budget
+): Promise<void> {
+  let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
-    if (budget.remaining <= 0) {
+    if (tree.roots.length >= budget.remaining) {
       budget.truncated = true;
-      break;
+      return;
     }
-    const input: Record<string, unknown> = { entityType, entityId, limit, sort };
-    // tRPC/zod expects a numeric cursor here; passing a string fails validation.
+    const input: Record<string, unknown> = { entityType, entityId, sort };
     if (cursor !== undefined) input.cursor = cursor;
-    // null when the entity has no Thread: nothing commented yet, or (for
-    // comment:<id>) a comment with no replies. That is an empty list, not an error.
-    const res = await services.trpc.call<{ comments?: CommentRow[]; nextCursor?: number | string } | null>(
-      'commentv2.getInfinite',
-      input,
-      'GET'
-    );
-    const batch = res?.comments ?? [];
-    for (const c of batch) {
-      if (budget.remaining <= 0) {
-        budget.truncated = true;
-        break;
-      }
-      all.push(c);
-      budget.remaining--;
-    }
-    const next = res?.nextCursor;
-    if (next === undefined || next === null || budget.remaining <= 0) {
-      return { comments: all, nextCursor: toNumericCursor(next) };
-    }
-    cursor = toNumericCursor(next);
-    if (cursor === undefined) return { comments: all };
+    const res = await services.trpc.call<CommentPage | null>('commentv3.getSection', input, 'GET');
+    tree.add(res);
+    if (!res?.nextCursor) return;
+    cursor = res.nextCursor;
   }
   budget.truncated = true;
-  return { comments: all };
 }
 
-/** A row from the legacy comment router, which serves model discussions. */
-interface LegacyCommentRow extends CommentRow {
-  tosViolation?: boolean;
-  _count?: { comments?: number };
-}
-
-/**
- * Model discussions live in the legacy comment router (comment.getAll by
- * modelId), not commentv2: a model's v2 Thread is missing or empty. Pinned rows
- * come first on the first page, as the site returns them.
- */
-async function fetchModelComments(
+/** Load the rest of one comment's replies (`commentv3.getReplies`), from where the tree stops. */
+async function loadReplies(
   services: Services,
-  modelId: number,
-  limit: number,
+  tree: CommentTree,
+  parentId: number,
   sort: string,
-  budget: { remaining: number; truncated: boolean }
-): Promise<LegacyCommentRow[]> {
-  const all: LegacyCommentRow[] = [];
-  // The site orders by createdAt alone and dedupes by id across pages; so do we.
-  const seen = new Set<number>();
-  let cursor: number | undefined;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    if (budget.remaining <= 0) {
+  budget: Budget
+): Promise<void> {
+  for (let page = 0; page < MAX_PAGES && tree.hasMore(parentId); page++) {
+    if ((tree.kids.get(parentId)?.ids.length ?? 0) >= budget.remaining) {
       budget.truncated = true;
-      return all;
+      return;
     }
-    const input: Record<string, unknown> = { modelId, limit, sort: sort.toLowerCase() };
-    if (cursor !== undefined) input.cursor = cursor;
-    const res = await services.trpc.call<{ comments?: LegacyCommentRow[]; nextCursor?: number | null } | null>(
-      'comment.getAll',
-      input,
-      'GET'
-    );
-    for (const c of res?.comments ?? []) {
-      if (seen.has(c.id)) continue;
-      seen.add(c.id);
-      if (budget.remaining <= 0) {
-        budget.truncated = true;
-        return all;
-      }
-      all.push(c);
-      budget.remaining--;
-    }
-    cursor = toNumericCursor(res?.nextCursor);
-    if (cursor === undefined) return all;
+    const input: Record<string, unknown> = { parentId, sort };
+    const cursor = tree.kids.get(parentId)?.nextCursor;
+    if (cursor) input.cursor = cursor;
+    const res = await services.trpc.call<CommentPage | null>('commentv3.getReplies', input, 'GET');
+    // A parent hidden from this viewer answers an empty page with no children entry.
+    tree.add({ ...res, children: res?.children?.[parentId] ? res.children : { [parentId]: { ids: [], nextCursor: null } } });
   }
-  budget.truncated = true;
-  return all;
-}
-
-/**
- * Replies to a legacy comment, minus ToS violations. Null when the site refuses
- * them: it checks the model (published, unlocked) for replies but not for the
- * top-level list, so one refusal must not fail the whole listing.
- */
-async function fetchModelReplies(
-  services: Services,
-  commentId: number,
-  budget: { remaining: number; truncated: boolean }
-): Promise<LegacyCommentRow[] | null> {
-  let res: LegacyCommentRow[] | null;
-  try {
-    res = await services.trpc.call<LegacyCommentRow[] | null>('comment.getCommentsById', { id: commentId }, 'GET');
-  } catch {
-    return null;
-  }
-  const replies: LegacyCommentRow[] = [];
-  for (const r of res ?? []) {
-    if (r.tosViolation) continue;
-    if (budget.remaining <= 0) {
-      budget.truncated = true;
-      break;
-    }
-    replies.push(r);
-    budget.remaining--;
-  }
-  return replies;
-}
-
-/** Coerce a cursor (the API returns a number, but be defensive) to a number. */
-function toNumericCursor(v: number | string | null | undefined): number | undefined {
-  if (v === undefined || v === null) return undefined;
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : undefined;
+  if (tree.hasMore(parentId)) budget.truncated = true;
 }
 
 export const commentTools: ToolModule = (reg) => {
@@ -211,12 +176,13 @@ export const commentTools: ToolModule = (reg) => {
     {
       title: 'List comments',
       description:
-        'List comments on an entity (article, image, post, model, etc). Follows pagination so whole threads are returned (not just the first page). Recurses into replies up to `depth` levels (replies are comments whose parent entity is comment:<parentId>); a model discussion has one reply level. To bound the worst-case fan-out, a single call fetches at most 500 comments total; when that ceiling is hit the result is marked truncated. Bodies truncated to 280 chars unless includeFull. Shows aggregated reactions, pin/hidden flags.',
+        'List the comments on an entity (model, image, post, article, review, bounty, etc.), or the replies to one comment (entityType=comment, entityId=the comment ID). Follows pagination so whole threads are returned, not just the first page, and nests replies up to `depth` levels. A single call shows at most 500 comments; past that the result is marked truncated. Bodies are truncated to 280 chars unless includeFull. Shows reaction counts and pin/hidden flags.',
       inputSchema: {
-        entityType: z.enum(ENTITY_TYPES).describe('Entity type the comments belong to'),
-        entityId: z.number().int().describe('Entity ID'),
+        entityType: z
+          .enum([...SECTION_TYPES, 'comment'])
+          .describe('Entity the comments are on, or `comment` to list the replies to the comment entityId'),
+        entityId: z.number().int().positive().describe('Entity ID (a comment ID when entityType is comment)'),
         depth: z.number().int().min(0).max(3).default(1).describe('Reply nesting depth (0 = top-level only)'),
-        limit: z.number().int().min(1).max(100).default(20).describe('Page size per upstream request'),
         sort: z.enum(['Oldest', 'Newest']).default('Oldest').describe('Sort order'),
         includeFull: z.boolean().default(false).describe('Show full bodies instead of truncating'),
       },
@@ -225,59 +191,60 @@ export const commentTools: ToolModule = (reg) => {
     async (args, services) => {
       const cap = args.includeFull ? 0 : 280;
       const lines: string[] = [];
-      // Global ceiling shared across the whole recursive walk. Prevents the
-      // 100^depth fan-out worst case from exhausting memory / the upstream API.
-      const budget = { remaining: MAX_COMMENTS_PER_CALL, truncated: false };
-      const collect = async (et: string, eid: number, d: number, indent: string): Promise<number> => {
-        const { comments } = await fetchAllComments(services, et, eid, args.limit, args.sort, budget);
-        for (const c of comments) {
+      // Global ceiling shared across the whole walk, so a deep thread can't fan out unbounded.
+      const budget: Budget = { remaining: MAX_COMMENTS_PER_CALL, truncated: false };
+      const tree = new CommentTree();
+
+      let top: number[];
+      if (args.entityType === 'comment') {
+        await loadReplies(services, tree, args.entityId, args.sort, budget);
+        top = tree.kids.get(args.entityId)?.ids ?? [];
+      } else {
+        await loadSection(services, tree, args.entityType, args.entityId, args.sort, budget);
+        top = tree.roots;
+      }
+
+      let shownTop = 0;
+      const render = async (ids: number[], level: number, indent: string): Promise<void> => {
+        for (const id of ids) {
+          const c = tree.byId.get(id);
+          if (!c) continue;
+          if (budget.remaining <= 0) {
+            budget.truncated = true;
+            return;
+          }
+          budget.remaining--;
+          if (level === 0) shownTop++;
           lines.push(formatComment(c, indent, cap));
-          if (d < args.depth && budget.remaining > 0) {
-            const children = await fetchAllComments(services, 'comment', c.id, args.limit, args.sort, budget);
-            if (children.comments.length) {
-              lines.push(`${indent}  ↳ ${children.comments.length} repl${children.comments.length === 1 ? 'y' : 'ies'}:`);
-              await collect('comment', c.id, d + 1, indent + '    ');
-            }
+          if (level >= args.depth) continue;
+          // One parent's refused or failed reply fetch must not fail the whole listing:
+          // show the comment, note its replies are unavailable, and keep going.
+          try {
+            await loadReplies(services, tree, id, args.sort, budget);
+          } catch {
+            lines.push(`${indent}  ↳ replies unavailable`);
+          }
+          const replies = (tree.kids.get(id)?.ids ?? []).filter((r) => tree.byId.has(r));
+          if (replies.length) {
+            lines.push(`${indent}  ↳ ${replies.length} repl${replies.length === 1 ? 'y' : 'ies'}:`);
+            await render(replies, level + 1, indent + '    ');
           }
         }
-        return comments.length;
       };
-      const collectModel = async (): Promise<number> => {
-        const comments = await fetchModelComments(services, args.entityId, args.limit, args.sort, budget);
-        for (const c of comments) {
-          lines.push(formatComment(c, '', cap));
-          if (args.depth > 0 && (c._count?.comments ?? 0) > 0) {
-            if (budget.remaining <= 0) {
-              budget.truncated = true;
-              continue;
-            }
-            const replies = await fetchModelReplies(services, c.id, budget);
-            if (replies === null) {
-              lines.push(`  ↳ replies unavailable`);
-            } else if (replies.length) {
-              lines.push(`  ↳ ${replies.length} repl${replies.length === 1 ? 'y' : 'ies'}:`);
-              for (const r of replies) lines.push(formatComment(r, '    ', cap));
-            }
-          }
-        }
-        return comments.length;
-      };
-      const top =
-        args.entityType === 'model' ? await collectModel() : await collect(args.entityType, args.entityId, 0, '');
+      await render(top, 0, '');
+
       const truncationNote = budget.truncated
         ? `\n\n[results truncated at ${MAX_COMMENTS_PER_CALL} comments — narrow entityId or reduce depth to see more]`
         : '';
       const footer = args.includeFull
         ? ''
-        : args.entityType === 'model'
-          ? '\n\nBodies truncated to 280 chars. Use includeFull for full text.'
-          : '\n\nBodies truncated to 280 chars. Use includeFull or get_comment for full text.';
+        : '\n\nBodies truncated to 280 chars. Use includeFull or get_comment for full text.';
       return ok(
         (lines.join('\n\n') || 'No comments.') +
-          `\n\n(${top} top-level, depth=${args.depth})` +
+          `\n\n(${shownTop} top-level, depth=${args.depth})` +
           truncationNote +
           footer,
-        { topLevelCount: top, truncated: budget.truncated, maxComments: MAX_COMMENTS_PER_CALL }
+        { topLevelCount: shownTop, truncated: budget.truncated, maxComments: MAX_COMMENTS_PER_CALL }
       );
     }
   );
@@ -286,53 +253,62 @@ export const commentTools: ToolModule = (reg) => {
     'get_comment',
     {
       title: 'Get comment',
-      description: 'Fetch a single comment with its full, uncapped body.',
-      inputSchema: { id: z.number().int().describe('Comment ID') },
+      description:
+        'Fetch a single comment with its full, uncapped body. commentv3 looks a comment up within the entity it is on, so pass that entity too: for a reply, the entity of the thread it is in (not the parent comment). On a model, an old comment ID from a link or notification also works.',
+      inputSchema: {
+        id: z.number().int().positive().describe('Comment ID'),
+        entityType: z.enum(SECTION_TYPES).describe('Entity the comment is on'),
+        entityId: z.number().int().positive().describe('Entity ID'),
+      },
       annotations: { readOnlyHint: true },
     },
     async (args, services) => {
-      const c = await services.trpc.call<CommentRow>('commentv2.getSingle', { id: args.id }, 'GET');
-      return ok(formatComment(c, '', 0), { id: c.id, content: stripHtml(c.content) });
+      const res = await services.trpc.call<{ comment: CommentRow }>(
+        'commentv3.getThread',
+        { commentId: args.id, entityType: args.entityType, entityId: args.entityId, sort: 'Oldest' },
+        'GET'
+      );
+      const c = res.comment;
+      return ok(formatComment(c, '', 0), {
+        id: c.id,
+        content: c.deleted ? null : stripHtml(c.content),
+        entityType: args.entityType,
+        entityId: args.entityId,
+        replyCount: c.replyCount ?? 0,
+      });
     }
   );
+
 
   reg(
     'post_comment',
     {
       title: 'Post comment or reply',
       description:
-        'Post a comment on an entity, or reply to an existing comment. To reply, pass parentCommentId (the reply is created as a comment on entity comment:<parentId>). Markdown is converted to the restricted comment HTML (p, br, strong, em, a).',
+        'Post a comment on an entity, or reply to an existing comment (wraps commentv3.create). Always pass the entity the thread is on (entityType + entityId); to reply, also pass parentCommentId, and the reply goes into the parent\'s thread. Markdown is converted to the restricted comment HTML (p, br, strong, em, a). Needs an onboarded, non-muted account and the SocialWrite scope.',
       inputSchema: {
-        entityType: z.enum(ENTITY_TYPES).optional().describe('Entity type (omit when replying via parentCommentId)'),
-        entityId: z.number().int().optional().describe('Entity ID (omit when replying via parentCommentId)'),
+        entityType: z.enum(SECTION_TYPES).describe('Entity the comment is on (for a reply, the entity of its thread)'),
+        entityId: z.number().int().positive().describe('Entity ID'),
         content: z.string().describe('Comment body in Markdown'),
-        parentCommentId: z.number().int().optional().describe('Reply to this comment (overrides entityType/entityId)'),
+        parentCommentId: z.number().int().positive().optional().describe('Reply to this comment'),
       },
       annotations: { readOnlyHint: false },
     },
     async (args, services) => {
       services.auth.requireKey();
-      const content = commentToHtml(args.content);
-      let entityType: string;
-      let entityId: number;
-      if (args.parentCommentId) {
-        entityType = 'comment';
-        entityId = args.parentCommentId;
-      } else {
-        if (!args.entityType || args.entityId === undefined)
-          throw new Error('Provide entityType + entityId, or parentCommentId for a reply');
-        entityType = args.entityType;
-        entityId = args.entityId;
-      }
-      const res = await services.trpc.call<{ id?: number }>('commentv2.upsert', {
-        entityType,
-        entityId,
-        content,
+      const input: Record<string, unknown> = {
+        entityType: args.entityType,
+        entityId: args.entityId,
+        content: commentToHtml(args.content),
+      };
+      if (args.parentCommentId !== undefined) input.parentId = args.parentCommentId;
+      const res = await services.trpc.call<{ id?: number }>('commentv3.create', input);
+      const isReply = args.parentCommentId !== undefined;
+      return ok(`${isReply ? 'Reply' : 'Comment'} posted. ID: ${res?.id ?? '(unknown)'}`, {
+        ok: true,
+        id: res?.id,
+        isReply,
       });
-      return ok(
-        `${args.parentCommentId ? 'Reply' : 'Comment'} posted. ID: ${res?.id ?? '(unknown)'}`,
-        { ok: true, id: res?.id, isReply: !!args.parentCommentId }
-      );
     }
   );
 
@@ -341,23 +317,16 @@ export const commentTools: ToolModule = (reg) => {
     {
       title: 'Edit comment',
       description:
-        'Edit a comment you own. The API requires the parent entity on every upsert, so pass the comment\'s entityType + entityId (for a reply, entityType=comment and entityId=parent comment ID).',
+        'Edit a comment you wrote, or any comment as a moderator (wraps commentv3.update). Markdown is converted to the restricted comment HTML. Needs an onboarded, non-muted account and the SocialWrite scope.',
       inputSchema: {
-        id: z.number().int().describe('Comment ID to edit'),
-        entityType: z.enum(ENTITY_TYPES).describe('Parent entity type'),
-        entityId: z.number().int().describe('Parent entity ID'),
+        id: z.number().int().positive().describe('Comment ID to edit'),
         content: z.string().describe('New body in Markdown'),
       },
       annotations: { readOnlyHint: false },
     },
     async (args, services) => {
       services.auth.requireKey();
-      await services.trpc.call('commentv2.upsert', {
-        id: args.id,
-        entityType: args.entityType,
-        entityId: args.entityId,
-        content: commentToHtml(args.content),
-      });
+      await services.trpc.call('commentv3.update', { id: args.id, content: commentToHtml(args.content) });
       return ok(`Comment ${args.id} updated.`, { ok: true, id: args.id });
     }
   );
@@ -366,13 +335,14 @@ export const commentTools: ToolModule = (reg) => {
     'delete_comment',
     {
       title: 'Delete comment',
-      description: 'Delete a comment you own (or any comment, if moderator).',
-      inputSchema: { id: z.number().int().describe('Comment ID to delete') },
+      description:
+        'Delete a comment you wrote, or any comment as a moderator (wraps commentv3.delete). A comment with replies stays as a [deleted] placeholder so its replies remain. Needs the SocialWrite scope.',
+      inputSchema: { id: z.number().int().positive().describe('Comment ID to delete') },
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async (args, services) => {
       services.auth.requireKey();
-      await services.trpc.call('commentv2.delete', { id: args.id });
+      await services.trpc.call('commentv3.delete', { id: args.id });
       return ok(`Comment ${args.id} deleted.`, { ok: true, id: args.id });
     }
   );
@@ -402,40 +372,45 @@ export const commentTools: ToolModule = (reg) => {
   reg(
     'pin_comment',
     {
-      title: 'Pin comment (moderator)',
-      description: 'Toggle the pinned state of a comment. Moderator-gated upstream.',
-      inputSchema: { id: z.number().int().describe('Comment ID') },
+      title: 'Pin comment',
+      description:
+        'Toggle the pinned state of a comment (wraps commentv3.togglePinned). Allowed for the owner of the entity the comment is on, and for moderators. Returns whether the comment is now pinned. Needs the SocialWrite scope.',
+      inputSchema: { id: z.number().int().positive().describe('Comment ID') },
       annotations: { readOnlyHint: false },
     },
     async (args, services) => {
       services.auth.requireKey();
-      await services.trpc.call('commentv2.togglePinned', { id: args.id });
-      return ok(`Toggled pin on comment ${args.id}.`, { ok: true, id: args.id });
+      const res = await services.trpc.call<{ id?: number; pinned?: boolean }>('commentv3.togglePinned', {
+        id: args.id,
+      });
+      const pinned = res?.pinned === true;
+      return ok(`${pinned ? 'Pinned' : 'Unpinned'} comment ${args.id}.`, { ok: true, id: args.id, pinned });
     }
   );
 
   reg(
     'lock_thread',
     {
-      title: 'Lock comment thread (moderator)',
-      description: 'Toggle the lock state of an entity\'s comment thread. Moderator-gated upstream.',
+      title: 'Lock comment section (moderator)',
+      description:
+        'Toggle the lock on an entity\'s whole comment section (wraps commentv3.toggleSectionLock); a locked section takes no new comments. Moderators only. Returns whether the section is now locked.',
       inputSchema: {
-        entityType: z.enum(ENTITY_TYPES).describe('Entity type'),
-        entityId: z.number().int().describe('Entity ID'),
+        entityType: z.enum(SECTION_TYPES).describe('Entity type'),
+        entityId: z.number().int().positive().describe('Entity ID'),
       },
       annotations: { readOnlyHint: false },
     },
     async (args, services) => {
       services.auth.requireKey();
-      await services.trpc.call('commentv2.toggleLockThread', {
+      const res = await services.trpc.call<{ locked?: boolean }>('commentv3.toggleSectionLock', {
         entityType: args.entityType,
         entityId: args.entityId,
       });
-      return ok(`Toggled thread lock on ${args.entityType}#${args.entityId}.`, {
-        ok: true,
-        entityType: args.entityType,
-        entityId: args.entityId,
-      });
+      const locked = res?.locked === true;
+      return ok(
+        `${locked ? 'Locked' : 'Unlocked'} the comment section on ${args.entityType}#${args.entityId}.`,
+        { ok: true, entityType: args.entityType, entityId: args.entityId, locked }
+      );
     }
   );
 };
