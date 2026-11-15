@@ -1,0 +1,22 @@
+name: CI
+
+# PR gate. The image workflow (docker.yml) re-runs typecheck + test on main
+# before it publishes; this one catches breakage before the merge. A README
+# tool catalog that no longer matches the tool registry fails `pnpm test`
+# (test/readme-catalog.test.ts).
+on:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test

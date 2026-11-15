@@ -174,3 +174,48 @@ describe('catalog is sourced from the real tool registry', () => {
     expect(catalog.find((t) => t.name === 'search_models')?.readOnly).toBe(true);
   });
 });
+
+describe('keyless claim matches the registry auth tags', () => {
+  const { catalog } = createServer(parseConfig({}));
+  const publicNames = catalog.filter((t) => t.auth === 'public').map((t) => t.name);
+  // Literal: the README rule is "only the 7 REST-backed Browse tools work keyless".
+  const expected =
+    'Only the 7 tools tagged public work without a key: search_models, get_model, ' +
+    'get_model_version, search_images, get_image, search_creators, list_enums. ' +
+    "Every other tool, reads included, goes through Civitai's tRPC API, which rejects " +
+    'anonymous callers, so it needs a key.';
+
+  it('the registry tags exactly the 7 Browse tools public, and no tRPC read', () => {
+    expect(publicNames).toEqual([
+      'search_models',
+      'get_model',
+      'get_model_version',
+      'search_images',
+      'get_image',
+      'search_creators',
+      'list_enums',
+    ]);
+    expect(publicNames).not.toContain('get_post');
+    expect(publicNames).not.toContain('get_article');
+  });
+
+  it('the landing page states exactly the registry-derived keyless set', () => {
+    const html = renderLandingHtml({ ...sampleData, catalog }, 'https://mcp.civitai.com');
+    expect(html.replace(/\s+/g, ' ')).toContain(expected);
+    expect(html).not.toMatch(/read tools work without a key/i);
+  });
+
+  it('llms.txt states exactly the registry-derived keyless set', () => {
+    const txt = renderLlmsTxt({ ...sampleData, catalog }, 'https://mcp.civitai.com');
+    expect(txt).toContain(expected);
+    expect(txt).not.toMatch(/read tools work unauthenticated/i);
+  });
+
+  it('the claim moves with the tags: re-tagging get_post public names it', () => {
+    const retagged = catalog.map((t) => (t.name === 'get_post' ? { ...t, auth: 'public' as const } : t));
+    const txt = renderLlmsTxt({ ...sampleData, catalog: retagged }, 'https://mcp.civitai.com');
+    expect(txt).toContain('Only the 8 tools tagged public work without a key:');
+    expect(txt).toMatch(/without a key: [^.]*get_post/);
+    expect(renderLlmsTxt({ ...sampleData, catalog: [] }, 'x')).toContain('No tool works without a key.');
+  });
+});

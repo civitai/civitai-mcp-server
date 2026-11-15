@@ -7,8 +7,8 @@ agents first-class access to Civitai: browse models, images, and creators; post
 and publish work; react, review, follow, and collect; write articles and
 comments; send and reply to direct messages; create and enter bounties; and
 (for moderators) manage site announcements and the changelog; and report
-Civitai developer-platform problems back to Civitai. 55 tools, exposed
-over Streamable HTTP or stdio.
+Civitai developer-platform problems back to Civitai. Exposed over Streamable
+HTTP or stdio; every tool is listed in the [tool catalog](#tool-catalog).
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
@@ -95,8 +95,8 @@ node mcp-cli.mjs list
 node mcp-cli.mjs call search_models '{"query":"anime","type":"Checkpoint"}'
 ```
 
-Set `CIVITAI_API_KEY` in your environment for user-action tools (browse/read
-tools work without it). The pulled script defaults to the server it came from;
+Set `CIVITAI_API_KEY` in your environment for every tool outside Browse (the
+Browse tools work without it). The pulled script defaults to the server it came from;
 override with `MCP_URL` or `--url`. Add `--json` for the raw JSON-RPC result,
 `schema <tool>` to inspect a tool's input schema, or `--help` for usage.
 
@@ -195,127 +195,155 @@ the env key is used.
 
 ---
 
-## Tool catalog (55 tools)
+## Tool catalog
 
 Every tool returns both a compact human-readable text block and a
 `structuredContent` JSON payload. Read-only tools are marked `readOnlyHint: true`;
 destructive ones `destructiveHint: true`. Errors are normalized to
 `{ ok: false, error, details? }` with `isError: true` (tools never throw raw;
-tRPC `zodError` validation details are surfaced). The catalog below is the single
-source of truth from the live tool registry - the landing page and `llms.txt`
-render the same list.
+tRPC `zodError` validation details are surfaced).
+
+The tables below are generated from the tool registry
+(`createServer(config).catalog`), the same list the landing page and `llms.txt`
+render. Don't edit them by hand: change the tool registration, then run
+`pnpm readme:catalog`. `pnpm test` fails when this section differs from the
+registry.
+
+<!-- BEGIN GENERATED TOOL CATALOG: edit the tool registrations, then run `pnpm readme:catalog` -->
+
+55 tools in 15 categories. 7 work without an API key (Auth `public`); the rest need one (Auth `required`).
 
 ### Browse (no auth required)
-| Tool | Description |
-|---|---|
-| `search_models` | Search models. Includes AIR URNs + `nextCursor`. Type, base model and generation filters apply on the server, with or without a query. |
-| `get_model` | Batch model details (concurrency 3): versions, files, AIR URNs. |
-| `get_model_version` | Batch version details: files, trigger words, AIR. |
-| `search_images` | Search images with full generation metadata (`withMeta=true`). |
-| `get_image` | Batch image details: prompt, negative, sampler, steps, CFG, seed, resources. |
-| `search_creators` | Search creators/users. |
-| `list_enums` | List filter enum values (model types, sorts, base models, timeframes). |
 
-### Posts (auth - onboarded, non-muted)
-| Tool | Description |
-|---|---|
-| `create_post` | Flagship sharing flow via the composite `post.createWithImages` (ONE atomic call: create + ordered images + optional publish; server handles cleanup). Images by UUID or URL (auto-uploaded); sequential `index`. `publishedAt` returns as a Date. MediaWrite scope. |
-| `get_post` | Fetch a post by ID. |
-| `publish_post` | Publish a draft via `post.update { publishedAt }` (Date hint). |
-| `delete_post` | Delete a post you own. |
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `search_models` | public | read-only | Search Civitai models (checkpoints, LoRAs, embeddings, etc). Returns names, base models, stats, trigger words, and AIR URNs for use with generation. Supports filtering by type, base model, tag, creator, and generation capability. Returns nextCursor for pagination. |
+| `get_model` | public | read-only | Fetch full details for one or more models by ID (batch, concurrency 3): all versions, files, trigger words, and AIR URNs. |
+| `get_model_version` | public | read-only | Fetch model version details by version ID (batch, concurrency 3): files, hashes, trigger words, and the AIR URN for generation. |
+| `search_images` | public | read-only | Search Civitai images with full generation metadata (prompt, negative, sampler, steps, CFG, seed, resources). Filter by query, model, version, base model, creator, type. Returns nextCursor for pagination. |
+| `get_image` | public | read-only | Fetch full generation metadata for image(s) by ID (batch, concurrency 3): prompt, negative prompt, sampler, steps, CFG, seed, and the resources used. There is no /images/:id endpoint upstream; this queries /images?imageId=<id>&withMeta=true. |
+| `search_creators` | public | read-only | Search Civitai creators/users by name. Returns username and model count. |
+| `list_enums` | public | read-only | List the Civitai API enum values usable for filtering (model types, sorts, base models, timeframes, etc). Use this to discover valid values before searching. |
 
-### Engagement (auth)
-| Tool | Description |
-|---|---|
-| `react` | Toggle Like/Dislike/Laugh/Cry/Heart on image/post/article/comment/resourceReview/etc. `reaction.toggle` is fire-and-forget (200 != confirmed). Guarded. |
-| `upsert_resource_review` | Star rating (1-5) + recommend + Markdown details. `resourceReview.upsert`. Guarded. |
-| `get_my_resource_review` | Read your existing review for a model version. |
-| `toggle_follow_user` | Follow/unfollow (resolves username to id). `user.toggleFollow`. Verified. |
-| `toggle_favorite_model` | Favorite/bookmark a model (explicit `setTo`). `user.toggleFavorite`. |
-| `notify_model` | Toggle new-version notifications. `user.toggleNotifyModel`. |
-| `toggle_bookmark_article` | Bookmark/un-bookmark an article. `user.toggleBookmarkedArticle`. Verified. |
-| `complete_onboarding_step` | Complete TOS/RedTOS/Profile/BrowsingLevels/Buzz. Prerequisite for any verified/guarded write. |
+### Posts
 
-### Articles (auth)
-| Tool | Description |
-|---|---|
-| `upsert_article` | Create/update. Markdown to HTML. Cover by UUID or URL (auto-uploaded). |
-| `publish_article` | getById to rebuild to upsert with the `publishedAt: ['Date']` hint. Idempotent. |
-| `unpublish_article` | Dedicated `article.unpublish`. |
-| `get_article` | Fetch by ID. |
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `create_post` | required |  | Create a Civitai image post and attach images in order. This is the primary way to share creative work. Wraps the composite `post.createWithImages` endpoint in ONE atomic call: the server creates the post, attaches every image (in the given order), and optionally publishes — handling cleanup itself if any part fails. Each image is supplied by a pre-uploaded UUID or a URL (uploaded automatically first). Set publish=true to publish immediately (default false leaves it as a draft you can publish later with publish_post). Requires an onboarded, non-muted account and the MediaWrite scope (a Full API key works). |
+| `get_post` | required | read-only | Fetch a post by ID (wraps post.get): title, publishedAt, image count, author. |
+| `publish_post` | required |  | Publish a draft post by setting publishedAt to now via post.update (with the required superjson Date hint). Idempotent-ish: re-publishing simply re-stamps publishedAt. Requires an onboarded account (post.update is verified). |
+| `delete_post` | required | destructive | Delete a post you own (or any post, if moderator). Wraps post.delete. |
 
-### Comments (auth)
-| Tool | Description |
-|---|---|
-| `list_comments` | Recursive thread fetch with per-comment reaction aggregation. |
-| `get_comment` | Single comment, uncapped body. |
-| `post_comment` | Post or reply (reply via `parentCommentId` to comment-entity chaining). |
-| `edit_comment` / `delete_comment` / `react_to_comment` | Edit, delete, toggle reaction. |
-| `pin_comment` / `lock_thread` | Moderator-gated upstream. |
+### Engagement
 
-### Collections (auth - flag-gated `collections`)
-| Tool | Description |
-|---|---|
-| `upsert_collection` | Create/update a collection. `collection.upsert`. Guarded. |
-| `add_to_collection` | Save one item (article/image/post/model) into one or more collections. `collection.saveItem` (exactly one id field + `collections[]`). |
-| `follow_collection` | Follow/unfollow a collection. |
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `react` | required |  | Toggle a reaction (Like, Dislike, Laugh, Cry, Heart) on an image, post, article, comment, resourceReview, etc. Toggling the same reaction again removes it. Requires an onboarded, non-muted account (reaction.toggle is guarded). CAVEAT: this call is fire-and-forget server-side — it returns void and swallows errors, so a success here does NOT confirm the reaction landed. Re-read the entity to verify. `comment` here means a modern (commentV2) thread comment. |
+| `upsert_resource_review` | required |  | Create or update your review of a model version: a numeric star rating (1-5), a recommend flag, and optional written details (Markdown, converted to the restricted review HTML). Uses resourceReview.upsert so re-reviewing edits your existing review instead of erroring. Requires an onboarded, non-muted account (guarded). |
+| `get_my_resource_review` | required | read-only | Fetch your existing review for a model version (resourceReview.getUserResourceReview), or null. |
+| `toggle_follow_user` | required |  | Toggle following a user (by numeric id or username). user.toggleFollow flips the follow state, so calling it again unfollows. Requires an onboarded account (verified). Pass a username and it is resolved to the numeric targetUserId first. |
+| `toggle_favorite_model` | required |  | Add or remove a model from your favorites/bookmarks via user.toggleFavorite. Unlike most toggles this takes an explicit setTo flag (true = favorite, false = remove). This is the bookmark action; use notify_model for new-version notifications instead. Protected (no onboarding gate). |
+| `notify_model` | required |  | Toggle the "notify me of new versions" engagement on a model via user.toggleNotifyModel. This is distinct from favoriting (use toggle_favorite_model to bookmark). Protected. |
+| `toggle_bookmark_article` | required |  | Toggle bookmarking an article via user.toggleBookmarkedArticle (input { id }). Calling again removes the bookmark. Requires an onboarded account (verified). |
+| `complete_onboarding_step` | required |  | Complete one onboarding step for the current account via user.completeOnboardingStep. A brand-new account cannot perform ANY verified/guarded social write (post, react, review, follow, etc.) until onboarding is finished, so this is a prerequisite. Steps: TOS, RedTOS, Profile (needs username+email), BrowsingLevels, Buzz (needs a recaptcha token, usually not completable headlessly). Run once per step. The Buzz step typically must be done in a real browser session. |
 
-### Notifications (auth)
-| Tool | Description |
-|---|---|
-| `list_notifications` | List notifications (unread/category filters). `cursor: ['Date']` hint applied; returns `nextCursor`. |
-| `mark_notifications_read` | Mark one (`id` as string, bigint hint) / `all` / a `category` read. |
-| `check_notifications` | Quick unread count. `user.checkNotifications`. |
+### Articles
 
-### Messaging (auth)
-| Tool | Description |
-|---|---|
-| `send_direct_message` | Lookup to `chat.createChat` to `chat.createMessage`. Markdown. Starts a NEW chat. |
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `upsert_article` | required |  | Create (omit id) or update (pass id) a Civitai article. Markdown content is converted to HTML server-side-safe. Optionally attach a cover by UUID (coverImageUuid) or by URL (coverImageUrl, uploaded automatically). Note: article.upsert requires title+content on every call. To flip publish state use publish_article. |
+| `publish_article` | required |  | Publish a draft article. Fetches the current article, rebuilds the full upsert payload (so nothing regresses), and sets status=Published + publishedAt=now with the superjson Date hint required for the date to deserialize server-side. Idempotent: a no-op on already-published articles. |
+| `unpublish_article` | required | destructive | Unpublish a published article via the dedicated article.unpublish endpoint. |
+| `get_article` | required | read-only | Fetch an article by ID (wraps article.getById): title, status, publishedAt, tags, cover. |
 
-### Chat (auth) - read & reply to existing threads
-| Tool | Description |
-|---|---|
-| `list_chats` | List your conversations + participants. |
-| `get_chat_messages` | Read a chat's messages (paginated, `nextCursor`). |
-| `reply_to_chat` | Send into an existing chat (`chat.createMessage`, Markdown, <=2000 chars). |
-| `mark_chat_read` | Mark ONE chat read via `chat.markChatRead { chatId }` (advances `lastViewedMessageId`). |
-| `mark_all_chats_read` | Blanket clear of every conversation via `chat.markAllAsRead`. |
+### Comments
 
-### Bounties (auth - flag-gated `bounties`)
-| Tool | Description |
-|---|---|
-| `create_bounty` | Create via `bounty.create` (NOT `bounty.upsert` - blocked for API keys). `startsAt`/`expiresAt` Date hints; >=1 example image (UUID or URL). |
-| `update_bounty` | Update a bounty you own. `bounty.update`. |
-| `create_bounty_entry` | Submit an entry via the composite `bountyEntry.submit` (>=1 pre-uploaded file ref `{url,name,sizeKB}` + >=1 image UUID/URL). BountiesWrite scope. |
-| `award_bounty` | Award a bounty to an entry. `bountyEntry.award { id }`. |
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `list_comments` | required | read-only | List comments on an entity (article, image, post, model, etc). Follows pagination so whole threads are returned (not just the first page). Recurses into replies up to `depth` levels (replies are comments whose parent entity is comment:<parentId>); a model discussion has one reply level. To bound the worst-case fan-out, a single call fetches at most 500 comments total; when that ceiling is hit the result is marked truncated. Bodies truncated to 280 chars unless includeFull. Shows aggregated reactions, pin/hidden flags. |
+| `get_comment` | required | read-only | Fetch a single comment with its full, uncapped body. |
+| `post_comment` | required |  | Post a comment on an entity, or reply to an existing comment. To reply, pass parentCommentId (the reply is created as a comment on entity comment:<parentId>). Markdown is converted to the restricted comment HTML (p, br, strong, em, a). |
+| `edit_comment` | required |  | Edit a comment you own. The API requires the parent entity on every upsert, so pass the comment's entityType + entityId (for a reply, entityType=comment and entityId=parent comment ID). |
+| `delete_comment` | required | destructive | Delete a comment you own (or any comment, if moderator). |
+| `react_to_comment` | required |  | Toggle a reaction on a comment (Like, Dislike, Laugh, Cry, Heart). Toggling the same reaction again removes it. |
+| `pin_comment` | required |  | Toggle the pinned state of a comment. Moderator-gated upstream. |
+| `lock_thread` | required |  | Toggle the lock state of an entity's comment thread. Moderator-gated upstream. |
 
-### Announcements (auth, moderator)
-| Tool | Description |
-|---|---|
-| `upsert_announcement` | Create/update with field merge. Image by UUID or URL. `startsAt` defaults to now on create. |
-| `delete_announcement` | Delete by ID. |
-| `list_announcements` | `scope: current` (live) or `all` (paginated, moderator). |
+### Collections
 
-### Changelog (auth, moderator + `changelogEdit` flag)
-| Tool | Description |
-|---|---|
-| `upsert_changelog` | Create/update. Markdown to HTML; `effectiveAt: ['Date']` hint. |
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `upsert_collection` | required |  | Create (omit id) or update (pass id) a collection via collection.upsert. Requires an onboarded, non-muted account (guarded). Flag-gated `collections` upstream — if the feature is disabled for the account the call errors with a feature/flag message rather than succeeding. |
+| `add_to_collection` | required |  | Save a single item (one of an article, image, post, or model) into one or more collections via collection.saveItem. You must pass exactly one of articleId/imageId/postId/modelId, and at least one collectionId. Protected and flag-gated `collections` — a disabled flag errors out. To find your default bookmark collection id, list your collections first. |
+| `follow_collection` | required |  | Follow a collection via collection.follow (use unfollow=true to unfollow). Protected and flag-gated `collections`. |
 
-### Images (auth)
-| Tool | Description |
-|---|---|
-| `upload_image` | URL or base64 to presign to PUT to UUID (+ probed dimensions). |
+### Notifications
 
-### Platform feedback (auth - `AppBlocksSubmit` scope or a full-access key)
-| Tool | Description |
-|---|---|
-| `send_platform_feedback` | Tell Civitai its developer platform (CLI, SDK, docs, review, sandbox, scopes, this server) got in the way. `platformFeedback.create`. Text is sent as given (no client-side redaction) - don't paste secrets; returns a `ref`. Gated server-side by a feature flag. |
-| `get_platform_feedback_status` | Read back 1-50 refs: received / acknowledged / fixed (with version) / addressed / not_planned, plus Civitai's note. `platformFeedback.getStatus`. |
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `list_notifications` | required | read-only | List the current user's notifications (notification.getAllByUser). Filter to unread only and/or a category, and page with cursor (an ISO timestamp; the Date hint is applied automatically). Returns the items plus a nextCursor. |
+| `mark_notifications_read` | required |  | Mark notifications as read (notification.markRead). Pass an id to clear one, all=true to clear everything, or a category to clear one bucket. The id is sent as a string because it is a bigint server-side. |
+| `check_notifications` | required | read-only | Return the current user's unread notification count (user.checkNotifications). |
+
+### Messaging
+
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `send_direct_message` | required |  | Send a direct message to a Civitai user (by numeric id or username). Chains user lookup -> chat.createChat -> chat.createMessage. Message is sent as Markdown; the server sanitizes it. |
+
+### Chat
+
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `list_chats` | required | read-only | List the current user's chat conversations (chat.getAllByUser): chat id and the other participants. Use the chat id with get_chat_messages / reply_to_chat. |
+| `get_chat_messages` | required | read-only | Read messages in a chat (chat.getInfiniteMessages), newest-first by default. Returns messages plus a nextCursor for older history. Use list_chats to find the chatId. |
+| `reply_to_chat` | required |  | Send a message into an EXISTING chat thread (chat.createMessage). Content is sent as Markdown (server-sanitized) and is capped at 2000 characters. To start a NEW conversation use send_direct_message instead. Muted users can read but not send. |
+| `mark_chat_read` | required |  | Mark a SINGLE chat conversation as read (chat.markChatRead) by advancing its lastViewedMessageId to the latest message. Use mark_all_chats_read to clear every conversation at once. |
+| `mark_all_chats_read` | required |  | Mark ALL of your chats as read (chat.markAllAsRead). This is a blanket clear across every conversation. Use mark_chat_read to clear just one. |
+
+### Bounties
+
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `create_bounty` | required |  | Create a bounty via bounty.create (NOT bounty.upsert — upsert is blocked for API keys). Requires an onboarded, non-muted account and the `bounties` feature flag. At least one example image is required (by UUID or URL). startsAt/expiresAt are dates (ISO strings here; the Date superjson hint is applied). Funding spends Buzz. |
+| `update_bounty` | required |  | Update a bounty you own via bounty.update (owner-checked, guarded, `bounties` flag). Pass only the fields to change; startsAt/expiresAt and at least one image are still required by the schema, so include current images by UUID. |
+| `create_bounty_entry` | required |  | Submit an entry to a bounty via the composite `bountyEntry.submit` endpoint (mutation/POST, guarded, `bounties` flag, BountiesWrite scope). Requires at least one deliverable file (a pre-uploaded file reference: { url, name, sizeKB }) and at least one example image (by UUID or URL — URLs are uploaded automatically to UUIDs). Files MUST already be uploaded; pass their refs. Pass id to edit an existing entry. |
+| `award_bounty` | required |  | Award a bounty to a specific entry via bountyEntry.award { id }. Protected + `bounties` flag. Only the bounty owner may award; awarding distributes the bounty funds to the entry author. |
+
+### Announcements (moderator)
+
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `upsert_announcement` | required |  | Create (omit id) or update (pass id) a homepage announcement banner. On update, missing fields are merged from the current row so required fields stay valid. startsAt defaults to now on create. Image can be a UUID or a URL (uploaded automatically). Moderator-only upstream. |
+| `delete_announcement` | required | destructive | Permanently delete an announcement by ID. Moderator-only upstream. |
+| `list_announcements` | required | read-only | List announcements. scope="current" returns currently-live ones (public endpoint); scope="all" returns the paginated moderator list. |
+
+### Changelog (moderator)
+
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `upsert_changelog` | required |  | Create (omit id) or update (pass id) a /changelog entry. Markdown content is converted to HTML (same converter as articles). On create, title + content + type are required and effectiveAt defaults to now. On update, only the fields you pass are changed. Moderator-only, gated by the changelogEdit flag. |
+
+### Images
+
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `upload_image` | required |  | Upload an image to Civitai from a URL or base64 data. Returns the image UUID (and probed dimensions) needed to set article covers and announcement images. Chains the presign + PUT upload internally. |
+
+### Platform feedback
+
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `send_platform_feedback` | required |  | Tell Civitai that its developer platform got in your way: a bug, a confusing or missing piece, or a request, in the Civitai CLI, an SDK, the developer docs, app review, the sandbox, token scopes, or this MCP server. Use it when the problem is in Civitai's platform; do NOT use it for bugs in the app you are building, for feedback about a Civitai app or model, or for site support. Give a short message plus whatever structured detail you have (about, kind, a site key in `ref`, the command or tool, an HTTP status, an error excerpt, the docs URL). This server adds its own name and version. The text is sent to Civitai as given: do not paste secrets, tokens or personal data. Returns a ref; pass it to get_platform_feedback_status later to see whether Civitai acknowledged or fixed it. A matching earlier report is counted rather than duplicated. Needs a Civitai API key with the AppBlocksSubmit scope ("Manage your Apps"); a full-access personal API key works. |
+| `get_platform_feedback_status` | required | read-only | Read back what Civitai did with platform feedback you sent with send_platform_feedback: received, acknowledged, fixed (with the version it shipped in), addressed, or not_planned, plus Civitai's public note and how many people reported it. Pass 1 to 50 refs exactly as send_platform_feedback returned them. A ref Civitai does not hold, or will not show you, comes back found: false. Needs a Civitai API key with the AppBlocksSubmit scope ("Manage your Apps"); a full-access personal API key works. |
 
 ### Utility
-| Tool | Description |
-|---|---|
-| `whoami` | Resolve the current user (id, username) and authoritative status via `user.getSelfStatus`: real `isOnboarded` + `completedSteps`, `muted`, `isModerator`, subscription `tier`. Good deploy smoke test. |
+
+| Tool | Auth | Hints | Description |
+|---|---|---|---|
+| `whoami` | required | read-only | Resolve the current user from the active API key (id, username) and report authoritative account status via user.getSelfStatus (UserRead scope). Good smoke test for deployments and for confirming which account will perform user actions. Reports REAL onboarding state (isOnboarded + completedSteps), muted state, and an authoritative isModerator flag, plus subscription tier. An un-onboarded account fails every verified/guarded social write (post, react, review, follow) and a muted account fails guarded writes — so check this first if writes are 500ing, then call complete_onboarding_step. |
+
+<!-- END GENERATED TOOL CATALOG -->
 
 ---
 
@@ -324,8 +352,11 @@ render the same list.
 - **API key:** create one at [civitai.com/user/account](https://civitai.com/user/account)
   and send it as `Authorization: Bearer <key>`. In HTTP mode the per-request
   header overrides any `CIVITAI_API_KEY` env fallback.
-- **Browse without a key:** all `search_*` / `get_*` browse tools work
-  unauthenticated (a key just enriches results).
+- **Browse without a key:** the Browse tools (the ones tagged `public` in the
+  catalog above) call REST `/api/v1` and work unauthenticated (a key just
+  enriches results). Every other tool, reads such as `get_post` and
+  `get_article` included, goes through Civitai's tRPC API, which rejects
+  anonymous callers with 401, so it needs a key.
 - **Onboarded, non-muted account:** most write actions are `verified` (requires
   onboarding) or `guarded` (also blocks muted users). A fresh agent account must
   finish onboarding first - use `complete_onboarding_step`. `whoami` reports the
@@ -367,7 +398,7 @@ Two behaviors back this:
 - **401 challenge** - a `tools/call` for an auth-`required` tool with no
   `Authorization: Bearer` is short-circuited at the HTTP layer with a 401 +
   challenge (instead of a deeper JSON-RPC `200 + isError` the client can't act
-  on). Browse/read tools stay anonymous; `initialize`, `tools/list`,
+  on). Browse tools stay anonymous; `initialize`, `tools/list`,
   `notifications/*`, and `ping` are never challenged. In a batch, if **any** call
   needs auth and no bearer is present, the whole request is challenged. The token
   is not validated here (presence is enough); a bad token surfaces as a tool

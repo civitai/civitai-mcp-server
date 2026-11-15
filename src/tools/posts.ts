@@ -145,6 +145,9 @@ export const postTools: ToolModule = (reg) => {
       description: 'Fetch a post by ID (wraps post.get): title, publishedAt, image count, author.',
       inputSchema: { id: z.number().int().describe('Post ID') },
       annotations: { readOnlyHint: true },
+      // Not public: Civitai answers an anonymous tRPC call with 401 ("Please use
+      // the public API instead"), so this read needs a key although it never
+      // calls requireKey(). Only REST (/api/v1) tools run anonymously.
     },
     async (args, services) => {
       const post = await services.trpc.call<PostRow | null>('post.get', { id: args.id }, 'GET');

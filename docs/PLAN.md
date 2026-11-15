@@ -1,11 +1,15 @@
 # Civitai MCP Server — Implementation Plan
 
+> **Historical design note.** Written while the server was being planned and built; it is not
+> maintained and may not match the current code. The live tool list is the README
+> [Tool catalog](../README.md#tool-catalog), generated from the tool registry.
+
 ## Goal
 
 A standalone MCP server exposing Civitai's APIs as MCP tools, replacing/superseding two Claude skills:
 
-- `C:\Users\Zipp4\.claude\skills\civitai-browse` (read-only browsing via public REST `/api/v1`)
-- `C:\Dev\Repos\work\civitai\civitai-user-skill\skill` (authenticated user actions via tRPC `/api/trpc`)
+- the `civitai-browse` skill (read-only browsing via public REST `/api/v1`)
+- the `civitai-user-skill` skill (authenticated user actions via tRPC `/api/trpc`)
 
 **Read both skills before implementing.** They contain hard-won API knowledge (superjson hints, publish quirks, sanitization rules, AIR URN mapping). Port that knowledge; improve the ergonomics.
 

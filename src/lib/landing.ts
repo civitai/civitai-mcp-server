@@ -92,6 +92,22 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Which tools work without a key, derived from the registry's `auth` tags (the
+ * same source as the README catalog's "N work without an API key" line), so
+ * the landing page and llms.txt cannot claim more keyless tools than exist.
+ * Plain text; callers escape it for HTML.
+ */
+export function keylessAuthSummary(catalog: ToolCatalogEntry[]): string {
+  const publicNames = catalog.filter((t) => t.auth === 'public').map((t) => t.name);
+  const rest =
+    "Every other tool, reads included, goes through Civitai's tRPC API, which rejects " +
+    'anonymous callers, so it needs a key.';
+  if (publicNames.length === 0) return `No tool works without a key. ${rest}`;
+  const noun = publicNames.length === 1 ? 'tool' : 'tools';
+  return `Only the ${publicNames.length} ${noun} tagged public work without a key: ${publicNames.join(', ')}. ${rest}`;
+}
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -128,8 +144,7 @@ export function renderLlmsTxt(data: LandingData, baseUrl: string): string {
   lines.push('- Transport: Streamable HTTP (JSON-RPC over HTTP POST)');
   lines.push(
     '- Auth: send `Authorization: Bearer <CIVITAI_API_KEY>` with each request. ' +
-      'Browse/read tools work unauthenticated; user-action tools (articles, comments, DMs, ' +
-      'uploads, announcements, changelog) require the key.'
+      keylessAuthSummary(data.catalog)
   );
   lines.push('- Get an API key at https://civitai.com/user/account');
   lines.push('');
@@ -404,8 +419,7 @@ ${rows}
       <pre><code>Authorization: Bearer YOUR_CIVITAI_API_KEY</code></pre>
       <p class="muted" style="margin-bottom:0;">Grab a key from
       <a href="https://civitai.com/user/account">civitai.com/user/account</a>.
-      Browse / read tools work without a key; user-action tools (articles, comments, DMs,
-      uploads, announcements, changelog) require one.</p>
+      ${escapeHtml(keylessAuthSummary(data.catalog))}</p>
     </div>
   </section>
 

@@ -204,6 +204,9 @@ export const articleTools: ToolModule = (reg) => {
         id: z.number().int().describe('Article ID'),
       },
       annotations: { readOnlyHint: true },
+      // Not public: Civitai answers an anonymous tRPC call with 401 ("Please use
+      // the public API instead"), so this read needs a key although it never
+      // calls requireKey(). Only REST (/api/v1) tools run anonymously.
     },
     async (args, services) => {
       const current = await services.trpc.call<ArticleRow | null>(
