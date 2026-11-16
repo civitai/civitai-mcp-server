@@ -7,6 +7,7 @@ import {
   formatVersionDetail,
   formatImageResult,
   formatImageDetail,
+  imageDetail,
   modelAirUrns,
   type ModelLite,
   type ImageLite,
@@ -172,6 +173,8 @@ export const browseTools: ToolModule = (reg) => {
         limit: args.limit,
         sort: sort ?? 'Most Reactions',
         period: period ?? 'AllTime',
+        // Without it, a modelId-only filter takes civitai's legacy path, which nests the prompt under meta.meta.
+        flatMeta: true,
         withMeta: true,
         query: args.query,
         modelId: args.modelId,
@@ -200,7 +203,7 @@ export const browseTools: ToolModule = (reg) => {
     {
       title: 'Get image details',
       description:
-        'Fetch full generation metadata for image(s) by ID (batch, concurrency 3): prompt, negative prompt, sampler, steps, CFG, seed, and the resources used. There is no /images/:id endpoint upstream; this queries /images?imageId=<id>&withMeta=true.',
+        'Fetch full generation metadata for image(s) by ID (batch, concurrency 3): prompt, negative prompt, sampler, steps, CFG, seed, and the resources used. There is no /images/:id endpoint upstream; this queries /images?imageId=<id>&withMeta=true&flatMeta=true.',
       inputSchema: {
         ids: z.array(z.number().int()).min(1).max(20).describe('Image IDs to fetch'),
       },
@@ -212,6 +215,8 @@ export const browseTools: ToolModule = (reg) => {
         const data = await rest.get<{ items?: ImageLite[] }>('/images', {
           imageId: id,
           withMeta: true,
+          // An imageId lookup takes civitai's legacy path, which otherwise sends meta as { id, meta }.
+          flatMeta: true,
           browsingLevel,
         });
         const item = data.items?.[0];
@@ -219,14 +224,17 @@ export const browseTools: ToolModule = (reg) => {
         return item;
       });
       const blocks: string[] = [];
+      const images: ReturnType<typeof imageDetail>[] = [];
       const errors: Array<{ id: number; error: string }> = [];
       for (const r of results) {
-        if (r.ok) blocks.push(formatImageDetail(r.value, config.webUrl));
-        else errors.push({ id: r.item, error: r.error });
+        if (r.ok) {
+          blocks.push(formatImageDetail(r.value, config.webUrl));
+          images.push(imageDetail(r.value));
+        } else errors.push({ id: r.item, error: r.error });
       }
       let text = blocks.join('\n\n' + '='.repeat(50) + '\n\n');
       if (errors.length) text += `\n\nFailed: ${errors.map((e) => `${e.id} (${e.error})`).join(', ')}`;
-      return ok(text || 'No images fetched.', { errors });
+      return ok(text || 'No images fetched.', { images, errors });
     }
   );
 
