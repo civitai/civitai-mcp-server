@@ -3,71 +3,67 @@
  *
  * Format: urn:air:{ecosystem}:{urnType}:civitai:{modelId}@{versionId}
  *
- * Ported verbatim from the civitai-browse skill (browse.mjs) so the URNs this
- * server emits match what civitai-gen expects.
+ * Mirrors civitai's `stringifyAIR` (src/shared/utils/air.ts) so the URNs this
+ * server emits are the ones civitai shows on the model page and generates with.
+ * Prefer the `air` civitai returns (GET /model-versions/:id has one); these are
+ * for responses that carry none, such as /models.
  */
+import { AIR_ECOSYSTEM_BY_BASE_MODEL } from './air-ecosystems.js';
 
-/** Maps a Civitai model `type` to the AIR `urnType` segment. */
+/** Maps a Civitai model `type` to the AIR `urnType` segment (civitai's typeUrnMap). */
 export const typeUrnMap: Record<string, string> = {
-  Checkpoint: 'checkpoint',
-  LORA: 'lora',
-  LoCon: 'lycoris',
-  DoRA: 'dora',
-  TextualInversion: 'embedding',
-  Hypernetwork: 'hypernet',
   AestheticGradient: 'ag',
+  Checkpoint: 'checkpoint',
+  Hypernetwork: 'hypernet',
+  TextualInversion: 'embedding',
   MotionModule: 'motion',
   Upscaler: 'upscaler',
   VAE: 'vae',
+  LORA: 'lora',
+  DoRA: 'dora',
+  LoCon: 'lycoris',
   Controlnet: 'controlnet',
+  TextEncoder: 'text_encoders',
+  UNet: 'unet',
+  CLIPVision: 'clipvision',
+  CLIP: 'clip',
+  VisionLanguage: 'visionlanguage',
 };
 
-/** Resolve the AIR urnType for a Civitai model type (falls back to lowercase). */
-export function getUrnType(modelType: string | undefined | null): string {
-  if (!modelType) return 'unknown';
-  return typeUrnMap[modelType] ?? modelType.toLowerCase();
-}
-
 /**
- * Guess the AIR ecosystem segment from a baseModel string. Returns null when no
- * mapping is known (in which case an AIR URN cannot be safely constructed).
+ * A version whose generation file is a standalone diffusion model or UNet ships
+ * only the denoiser, and civitai's AIR names that file kind instead of the model
+ * type (e.g. a Flux or Wan Checkpoint becomes `diffusionmodel`).
  */
-export function guessEcosystem(baseModel: string | undefined | null): string | null {
+export const fileTypeUrnMap: Record<string, string> = {
+  'Diffusion Model': 'diffusionmodel',
+  UNet: 'unet',
+};
+
+/** The AIR urnType for a model type, or null for a type civitai gives no AIR (Workflows, Poses, ...). */
+export function getUrnType(modelType: string | undefined | null, fileType?: string | null): string | null {
+  return (fileType ? fileTypeUrnMap[fileType] : undefined) ?? (modelType ? typeUrnMap[modelType] : undefined) ?? null;
+}
+
+/** The AIR ecosystem segment for a base model, or null when it is not one civitai knows. */
+export function airEcosystem(baseModel: string | undefined | null): string | null {
   if (!baseModel) return null;
-  const bm = baseModel.toLowerCase();
-  if (bm.includes('flux.2') || bm.includes('flux2')) return 'flux2';
-  if (bm.includes('flux')) return 'flux1';
-  if (bm.includes('sd 3') || bm.includes('sd3')) return 'sd3';
-  if (bm.includes('sdxl') || bm.includes('pony') || bm.includes('illustrious') || bm.includes('noobai'))
-    return 'sdxl';
-  if (bm.includes('sd 1') || bm.includes('sd1')) return 'sd1';
-  if (bm.includes('sd 2') || bm.includes('sd2')) return 'sd2';
-  if (bm.includes('hunyuan')) return 'hunyuan';
-  if (bm.includes('kolors')) return 'kolors';
-  if (bm.includes('lumina')) return 'lumina';
-  if (bm.includes('auraflow')) return 'auraflow';
-  if (bm.includes('chroma')) return 'chroma';
-  if (bm.includes('hidream')) return 'hidream';
-  if (bm.includes('wan')) return 'wan';
-  if (bm.includes('qwen')) return 'qwen';
-  if (bm.includes('zimage')) return 'zimage';
-  if (bm.includes('pixart')) return 'pixart';
-  return null;
+  return Object.hasOwn(AIR_ECOSYSTEM_BY_BASE_MODEL, baseModel) ? AIR_ECOSYSTEM_BY_BASE_MODEL[baseModel] ?? null : null;
 }
 
 /**
- * Build an AIR URN for a model version. Returns null when the ecosystem cannot
- * be guessed from the baseModel.
+ * Build an AIR URN for a model version, or null when the base model or type has
+ * no AIR. `fileType` is the version's primary file type.
  */
 export function buildAir(params: {
   modelType: string | undefined | null;
   baseModel: string | undefined | null;
   modelId: number;
   versionId: number;
+  fileType?: string | null;
 }): string | null {
-  const eco = guessEcosystem(params.baseModel);
-  if (!eco) return null;
-  const urnType = getUrnType(params.modelType);
-  if (urnType === 'unknown') return null;
+  const eco = airEcosystem(params.baseModel);
+  const urnType = getUrnType(params.modelType, params.fileType);
+  if (!eco || !urnType) return null;
   return `urn:air:${eco}:${urnType}:civitai:${params.modelId}@${params.versionId}`;
 }
