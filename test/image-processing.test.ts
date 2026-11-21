@@ -78,12 +78,12 @@ describe('get_image reports processing for the caller’s own unscanned image', 
     );
   });
 
-  it('Rescan counts as processing too', async () => {
+  it.each(['Rescan', 'PendingManualAssignment'])('%s counts as processing too', async (ingestion) => {
     const s = callerKey();
-    stub(s, [], { 7302: { id: 7302, ingestion: 'Rescan', postId: null } });
+    stub(s, [], { 7302: { id: 7302, ingestion, postId: null } });
     const res = await run('get_image', s, { ids: [7302] });
     expect(res.structuredContent).toMatchObject({
-      processing: [{ id: 7302, ingestion: 'Rescan', postId: null }],
+      processing: [{ id: 7302, ingestion, postId: null }],
       errors: [],
     });
   });
@@ -103,7 +103,7 @@ describe('get_image reports processing for the caller’s own unscanned image', 
     });
   });
 
-  it.each(['Scanned', 'Error', 'Blocked', 'NotFound', 'PendingManualAssignment', undefined])(
+  it.each(['Scanned', 'Error', 'Blocked', 'NotFound', undefined])(
     'ingestion %s is not reported as processing',
     async (ingestion) => {
       const s = callerKey();

@@ -9,11 +9,16 @@
  * that as "not found" is what made a client delete fresh posts.
  *
  * `Pending` is a fresh upload waiting for its scan; `Rescan` is one queued for
- * another scan. Both resolve on their own. Every other non-`Scanned` state
- * (`Error`, `Blocked`, `NotFound`, `PendingManualAssignment`) is not "wait and
- * it appears", so it is not reported as processing.
+ * another scan; `PendingManualAssignment` is waiting for a moderator to rate it
+ * (the site shows its owner "This image is waiting to be rated"). None of the
+ * three is a missing image. `Error`, `Blocked` and `NotFound` are failures, not
+ * a wait, so they are not reported as processing.
  */
-export const PROCESSING_INGESTION_STATES: readonly string[] = ['Pending', 'Rescan'];
+export const PROCESSING_INGESTION_STATES: readonly string[] = [
+  'Pending',
+  'Rescan',
+  'PendingManualAssignment',
+];
 
 /** Whether an `image.get` ingestion value means the image is still being processed. */
 export function isProcessingIngestion(ingestion: unknown): boolean {
