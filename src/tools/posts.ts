@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ToolModule } from '../server.js';
 import { displayDate, ok, type Services } from './helpers.js';
 import { uploadImage } from './images.js';
+import { PROCESSING_ADVICE } from '../lib/ingestion.js';
 
 /**
  * Post creation & publishing (post.* / image.*).
@@ -75,6 +76,7 @@ export const postTools: ToolModule = (reg) => {
         'attaches every image (in the given order), and optionally publishes — handling cleanup itself if any part fails. ' +
         'Each image is supplied by a pre-uploaded UUID or a URL (uploaded automatically first). ' +
         'Set publish=true to publish immediately (default false leaves it as a draft you can publish later with publish_post). ' +
+        'New images are processing until their scan finishes and stay hidden until then (returned as processingImageIds); do not delete the post meanwhile. ' +
         'Requires an onboarded, non-muted account and the MediaWrite scope (a Full API key works).',
       inputSchema: {
         title: z.string().optional().describe('Post title'),
@@ -123,12 +125,20 @@ export const postTools: ToolModule = (reg) => {
 
       const imageIds = res.imageIds ?? [];
       const url = `${services.config.webUrl}/posts/${res.id}`;
+      // Every attached image is a new row that the site has only just queued for
+      // scanning (its scan result arrives later, by callback), so all of them are
+      // still processing when this returns, and stay hidden until scanned.
+      const processingImageIds = imageIds;
+      const processingNote = processingImageIds.length
+        ? `\nImages processing: ${processingImageIds.join(', ')}. ${PROCESSING_ADVICE}`
+        : '';
       return ok(
-        `Post ${args.publish ? 'created and published' : 'created (draft)'}.\nID: ${res.id}\nImages attached: ${imageIds.length}\nURL: ${url}`,
+        `Post ${args.publish ? 'created and published' : 'created (draft)'}.\nID: ${res.id}\nImages attached: ${imageIds.length}\nURL: ${url}${processingNote}`,
         {
           ok: true,
           id: res.id,
           imageIds,
+          processingImageIds,
           published: args.publish,
           publishedAt: res.publishedAt ?? null,
           nsfwLevel: res.nsfwLevel,

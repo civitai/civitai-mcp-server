@@ -11,9 +11,50 @@ import {
   type ModelLite,
   type ImageLite,
 } from '../lib/format.js';
-import { allowsAllLevels } from '../client/trpc.js';
+import { allowsAllLevels, type TrpcClient } from '../client/trpc.js';
+import type { AuthContext } from '../client/auth.js';
+import { isProcessingIngestion, PROCESSING_ADVICE } from '../lib/ingestion.js';
 
 const MAX_CONCURRENCY = 3;
+
+interface ProcessingImage {
+  id: number;
+  ingestion: string;
+  postId: number | null;
+}
+
+/**
+ * Whether an image REST did not return exists for this caller and is still
+ * being scanned. REST `/images` drops an unscanned image for everyone, its
+ * owner included. `image.get` is the site's own single-image read: it answers
+ * NOT_FOUND unless this caller may see the image, and it shows an unscanned,
+ * unrated image to its owner (and moderators) only. So "processing" is said
+ * exactly where the site already tells this caller the image exists, never
+ * more widely.
+ *
+ * Only with the caller's own key: an HTTP request that fell back to the
+ * deployment's env key would otherwise read that account's images. Any
+ * failure (no access, 401, network) keeps the plain "not found".
+ */
+async function processingState(
+  id: number,
+  trpc: TrpcClient,
+  auth: AuthContext
+): Promise<ProcessingImage | null> {
+  if (!auth.hasKey() || !auth.keyIsCaller) return null;
+  let image: { id?: unknown; ingestion?: unknown; postId?: unknown } | null;
+  try {
+    image = await trpc.call('image.get', { id }, 'GET');
+  } catch {
+    return null;
+  }
+  if (image?.id !== id || !isProcessingIngestion(image.ingestion)) return null;
+  return {
+    id,
+    ingestion: image.ingestion as string,
+    postId: typeof image.postId === 'number' ? image.postId : null,
+  };
+}
 
 export const browseTools: ToolModule = (reg) => {
   reg(
@@ -200,33 +241,48 @@ export const browseTools: ToolModule = (reg) => {
     {
       title: 'Get image details',
       description:
-        'Fetch full generation metadata for image(s) by ID (batch, concurrency 3): prompt, negative prompt, sampler, steps, CFG, seed, and the resources used. There is no /images/:id endpoint upstream; this queries /images?imageId=<id>&withMeta=true.',
+        'Fetch full generation metadata for image(s) by ID (batch, concurrency 3): prompt, negative prompt, sampler, steps, CFG, seed, and the resources used. There is no /images/:id endpoint upstream; this queries /images?imageId=<id>&withMeta=true. ' +
+        'A new image stays hidden until its scan finishes: with your own API key, your own not-yet-scanned image is listed under `processing` instead of failing as not found.',
       inputSchema: {
         ids: z.array(z.number().int()).min(1).max(20).describe('Image IDs to fetch'),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (args, { rest, trpc, config }) => {
+    async (args, { rest, trpc, config, auth }) => {
       const browsingLevel = await trpc.getBrowsingLevel();
-      const results = await mapWithConcurrency(args.ids, MAX_CONCURRENCY, async (id) => {
-        const data = await rest.get<{ items?: ImageLite[] }>('/images', {
-          imageId: id,
-          withMeta: true,
-          browsingLevel,
-        });
-        const item = data.items?.[0];
-        if (!item) throw new Error(`No image found with ID ${id}`);
-        return item;
-      });
+      const results = await mapWithConcurrency(
+        args.ids,
+        MAX_CONCURRENCY,
+        async (id): Promise<{ image: ImageLite } | { processing: ProcessingImage }> => {
+          const data = await rest.get<{ items?: ImageLite[] }>('/images', {
+            imageId: id,
+            withMeta: true,
+            browsingLevel,
+          });
+          const item = data.items?.[0];
+          if (item) return { image: item };
+          const processing = await processingState(id, trpc, auth);
+          if (processing) return { processing };
+          throw new Error(`No image found with ID ${id}`);
+        }
+      );
       const blocks: string[] = [];
+      const processing: ProcessingImage[] = [];
       const errors: Array<{ id: number; error: string }> = [];
       for (const r of results) {
-        if (r.ok) blocks.push(formatImageDetail(r.value, config.webUrl));
-        else errors.push({ id: r.item, error: r.error });
+        if (!r.ok) errors.push({ id: r.item, error: r.error });
+        else if ('image' in r.value) blocks.push(formatImageDetail(r.value.image, config.webUrl));
+        else processing.push(r.value.processing);
       }
       let text = blocks.join('\n\n' + '='.repeat(50) + '\n\n');
+      if (processing.length) {
+        const lines = processing.map(
+          (p) => `Image ${p.id} is still processing (ingestion: ${p.ingestion}).`
+        );
+        text += `${text ? '\n\n' : ''}${lines.join('\n')}\n${PROCESSING_ADVICE}`;
+      }
       if (errors.length) text += `\n\nFailed: ${errors.map((e) => `${e.id} (${e.error})`).join(', ')}`;
-      return ok(text || 'No images fetched.', { errors });
+      return ok(text || 'No images fetched.', { processing, errors });
     }
   );
 
