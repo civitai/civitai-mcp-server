@@ -103,7 +103,7 @@ describe('get_image reports processing for the caller’s own unscanned image', 
     });
   });
 
-  it.each(['Scanned', 'Error', 'Blocked', 'NotFound', undefined])(
+  it.each(['Error', 'Blocked', 'NotFound', undefined])(
     'ingestion %s is not reported as processing',
     async (ingestion) => {
       const s = callerKey();
@@ -115,6 +115,42 @@ describe('get_image reports processing for the caller’s own unscanned image', 
       });
     }
   );
+
+  it('a Scanned image REST hid (e.g. above the browsing level) reads as existing, not missing', async () => {
+    const s = callerKey();
+    stub(s, [], { 7322: { id: 7322, ingestion: 'Scanned', postId: 4405 } });
+    const res = await run('get_image', s, { ids: [7322] });
+    expect(res.structuredContent).toEqual({
+      processing: [],
+      errors: [
+        {
+          id: 7322,
+          error:
+            'Image 7322 exists but the image search does not return it for you (for example, it is rated above your browsing level)',
+        },
+      ],
+    });
+  });
+
+  it('a key without MediaRead (image.get 403) says the processing check could not run', async () => {
+    const s = callerKey();
+    vi.spyOn(s.trpc, 'call').mockImplementation(async (procedure: string) => {
+      if (procedure === 'auth.getUser') return null as never;
+      throw new TrpcError('image.get: Your API key does not have the required scope for this action', 403);
+    });
+    vi.spyOn(s.rest, 'get').mockResolvedValue({ items: [] } as never);
+    const res = await run('get_image', s, { ids: [7323] });
+    expect(res.structuredContent).toEqual({
+      processing: [],
+      errors: [
+        {
+          id: 7323,
+          error:
+            'No image found with ID 7323 (could not check whether it is still processing: your API key lacks the MediaRead scope)',
+        },
+      ],
+    });
+  });
 
   it('image.get NOT_FOUND (not this caller’s to see) keeps "No image found"', async () => {
     const s = callerKey();
