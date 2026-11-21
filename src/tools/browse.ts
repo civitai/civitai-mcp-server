@@ -11,9 +11,65 @@ import {
   type ModelLite,
   type ImageLite,
 } from '../lib/format.js';
-import { allowsAllLevels } from '../client/trpc.js';
+import { allowsAllLevels, TrpcError, type TrpcClient } from '../client/trpc.js';
+import type { AuthContext } from '../client/auth.js';
+import { isProcessingIngestion, PROCESSING_ADVICE } from '../lib/ingestion.js';
 
 const MAX_CONCURRENCY = 3;
+
+interface ProcessingImage {
+  id: number;
+  ingestion: string;
+  postId: number | null;
+}
+
+/** What `image.get` says about an image REST did not return. */
+type Fallback =
+  | { kind: 'processing'; image: ProcessingImage }
+  /** Visible to this caller and scanned, but REST did not return it (e.g. rated above the caller's browsing level). */
+  | { kind: 'hidden' }
+  /** The key lacks the scope `image.get` needs (MediaRead), so nothing could be checked. */
+  | { kind: 'unchecked' };
+
+/**
+ * What an image REST did not return is, for this caller. REST `/images` drops
+ * an unscanned image for everyone, its owner included. `image.get` is the
+ * site's own single-image read: it answers NOT_FOUND unless this caller may see
+ * the image, and it shows an unscanned, unrated image to its owner and
+ * moderators only. So "processing" (or "exists but hidden") is said only where
+ * the site already tells this caller the image exists, never more widely.
+ *
+ * Only with the caller's own key: an HTTP request that fell back to the
+ * deployment's env key would otherwise read that account's images. A 403 is
+ * the key missing `image.get`'s MediaRead scope (`create_post` needs only
+ * MediaWrite); any other failure keeps the plain "not found".
+ */
+async function imageGetFallback(
+  id: number,
+  trpc: TrpcClient,
+  auth: AuthContext
+): Promise<Fallback | null> {
+  // keyIsCaller is false with no key at all, so this also covers the anonymous caller.
+  if (!auth.keyIsCaller) return null;
+  let image: { id?: unknown; ingestion?: unknown; postId?: unknown } | null;
+  try {
+    image = await trpc.call('image.get', { id }, 'GET');
+  } catch (err) {
+    return err instanceof TrpcError && err.status === 403 ? { kind: 'unchecked' } : null;
+  }
+  if (image?.id !== id) return null;
+  if (isProcessingIngestion(image.ingestion)) {
+    return {
+      kind: 'processing',
+      image: {
+        id,
+        ingestion: image.ingestion as string,
+        postId: typeof image.postId === 'number' ? image.postId : null,
+      },
+    };
+  }
+  return image.ingestion === 'Scanned' ? { kind: 'hidden' } : null;
+}
 
 export const browseTools: ToolModule = (reg) => {
   reg(
@@ -200,33 +256,58 @@ export const browseTools: ToolModule = (reg) => {
     {
       title: 'Get image details',
       description:
-        'Fetch full generation metadata for image(s) by ID (batch, concurrency 3): prompt, negative prompt, sampler, steps, CFG, seed, and the resources used. There is no /images/:id endpoint upstream; this queries /images?imageId=<id>&withMeta=true.',
+        'Fetch full generation metadata for image(s) by ID (batch, concurrency 3): prompt, negative prompt, sampler, steps, CFG, seed, and the resources used. There is no /images/:id endpoint upstream; this queries /images?imageId=<id>&withMeta=true. ' +
+        'A new image stays hidden until its scan finishes: with your own API key (MediaRead scope), your own not-yet-scanned image is listed under `processing` instead of failing as not found.',
       inputSchema: {
         ids: z.array(z.number().int()).min(1).max(20).describe('Image IDs to fetch'),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (args, { rest, trpc, config }) => {
+    async (args, { rest, trpc, config, auth }) => {
       const browsingLevel = await trpc.getBrowsingLevel();
-      const results = await mapWithConcurrency(args.ids, MAX_CONCURRENCY, async (id) => {
-        const data = await rest.get<{ items?: ImageLite[] }>('/images', {
-          imageId: id,
-          withMeta: true,
-          browsingLevel,
-        });
-        const item = data.items?.[0];
-        if (!item) throw new Error(`No image found with ID ${id}`);
-        return item;
-      });
+      const results = await mapWithConcurrency(
+        args.ids,
+        MAX_CONCURRENCY,
+        async (id): Promise<{ image: ImageLite } | { processing: ProcessingImage }> => {
+          const data = await rest.get<{ items?: ImageLite[] }>('/images', {
+            imageId: id,
+            withMeta: true,
+            browsingLevel,
+          });
+          const item = data.items?.[0];
+          if (item) return { image: item };
+          const fallback = await imageGetFallback(id, trpc, auth);
+          if (fallback?.kind === 'processing') return { processing: fallback.image };
+          if (fallback?.kind === 'hidden') {
+            throw new Error(
+              `Image ${id} exists but the image search does not return it for you (for example, it is rated above your browsing level)`
+            );
+          }
+          if (fallback?.kind === 'unchecked') {
+            throw new Error(
+              `No image found with ID ${id} (could not check whether it is still processing: your API key lacks the MediaRead scope)`
+            );
+          }
+          throw new Error(`No image found with ID ${id}`);
+        }
+      );
       const blocks: string[] = [];
+      const processing: ProcessingImage[] = [];
       const errors: Array<{ id: number; error: string }> = [];
       for (const r of results) {
-        if (r.ok) blocks.push(formatImageDetail(r.value, config.webUrl));
-        else errors.push({ id: r.item, error: r.error });
+        if (!r.ok) errors.push({ id: r.item, error: r.error });
+        else if ('image' in r.value) blocks.push(formatImageDetail(r.value.image, config.webUrl));
+        else processing.push(r.value.processing);
       }
       let text = blocks.join('\n\n' + '='.repeat(50) + '\n\n');
+      if (processing.length) {
+        const lines = processing.map(
+          (p) => `Image ${p.id} is still processing (ingestion: ${p.ingestion}).`
+        );
+        text += `${text ? '\n\n' : ''}${lines.join('\n')}\n${PROCESSING_ADVICE}`;
+      }
       if (errors.length) text += `\n\nFailed: ${errors.map((e) => `${e.id} (${e.error})`).join(', ')}`;
-      return ok(text || 'No images fetched.', { errors });
+      return ok(text || 'No images fetched.', { processing, errors });
     }
   );
 
