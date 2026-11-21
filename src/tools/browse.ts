@@ -41,7 +41,8 @@ async function processingState(
   trpc: TrpcClient,
   auth: AuthContext
 ): Promise<ProcessingImage | null> {
-  if (!auth.hasKey() || !auth.keyIsCaller) return null;
+  // keyIsCaller is false with no key at all, so this also covers the anonymous caller.
+  if (!auth.keyIsCaller) return null;
   let image: { id?: unknown; ingestion?: unknown; postId?: unknown } | null;
   try {
     image = await trpc.call('image.get', { id }, 'GET');
