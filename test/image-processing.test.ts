@@ -202,6 +202,7 @@ describe('get_image reports processing for the caller’s own unscanned image', 
 
 const BLOCKED_TEXT = 'it is not visible to other users, and waiting will not change that.';
 const APPEAL_TEXT = 'If you think this is a mistake, its page on Civitai shows whether you can appeal.';
+const UNDER_REVIEW_TEXT = "it stays hidden from other users until Civitai's moderators review it.";
 const GENERATION_DATA_TEXT =
   'Civitai could not verify it was AI-generated; add the generation details (prompt, tools and resources used) to its post to restore it.';
 const ERROR_TEXT =
@@ -238,10 +239,17 @@ describe('get_image reports blocked and failed images as their own state', () =>
       'addGenerationData',
     ],
     ['a moderator block on a scan error', { ingestion: 'Error', nsfwLevel: 0, blockedFor: 'moderated' }, 'appeal'],
+    ['a legacy capitalised moderator block', { ingestion: 'Scanned', nsfwLevel: 32, blockedFor: 'Moderated' }, 'appeal'],
+    ['a CSAM reason', { ingestion: 'Blocked', nsfwLevel: 32, blockedFor: 'CSAM' }, null],
     [
       'a moderator block already under appeal',
       { ingestion: 'Blocked', nsfwLevel: 32, blockedFor: 'moderated', needsReview: 'appeal' },
-      null,
+      'underReview',
+    ],
+    [
+      'a block held for another review',
+      { ingestion: 'Blocked', nsfwLevel: 32, blockedFor: 'tos', needsReview: 'minor' },
+      'underReview',
     ],
   ] as const)('%s -> blocked', async (_label, fields, remedy) => {
     const s = callerKey();
@@ -253,8 +261,12 @@ describe('get_image reports blocked and failed images as their own state', () =>
       failed: [],
       errors: [],
     });
-    const tail = remedy === 'appeal' ? ` ${APPEAL_TEXT}` : remedy === 'addGenerationData' ? ` ${GENERATION_DATA_TEXT}` : '';
-    expect(textOf(res)).toBe(`Image 7402 is blocked: ${BLOCKED_TEXT}${tail}`);
+    const expected = {
+      underReview: `Image 7402 is blocked: ${UNDER_REVIEW_TEXT}`,
+      appeal: `Image 7402 is blocked: ${BLOCKED_TEXT} ${APPEAL_TEXT}`,
+      addGenerationData: `Image 7402 is blocked: ${BLOCKED_TEXT} ${GENERATION_DATA_TEXT}`,
+    };
+    expect(textOf(res)).toBe(remedy ? expected[remedy] : `Image 7402 is blocked: ${BLOCKED_TEXT}`);
   });
 
   it('Error ingestion -> failed, with the retry advice', async () => {

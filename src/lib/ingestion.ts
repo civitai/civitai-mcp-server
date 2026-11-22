@@ -70,29 +70,35 @@ export const FAILED_ADVICE: Readonly<Record<string, string>> = {
 };
 
 /** What the owner can do about a block, where the site offers them something. */
-export type BlockedRemedy = 'addGenerationData' | 'appeal';
+export type BlockedRemedy = 'underReview' | 'addGenerationData' | 'appeal';
 
 /**
  * The remedy the site's image page offers the owner of a blocked image, else
- * null. `AiNotVerified`: the page asks the owner to add the generation details
+ * null. Any `needsReview` hold first: the page tells the owner the image stays
+ * hidden until moderators review it (an appeal shows as `appeal` here), so
+ * waiting can change it. `AiNotVerified`: the page asks the owner to add the generation details
  * to the post to restore it. `moderated` with no review pending: the page may
  * offer an appeal (`isAppealableImage`), though whether one is still open (one
  * per block) is a separate read this server does not make. Every other reason
  * gets only "not visible to other users".
  */
 export function blockedRemedy(image: { blockedFor?: unknown; needsReview?: unknown }): BlockedRemedy | null {
+  if (image.needsReview) return 'underReview';
   if (image.blockedFor === 'AiNotVerified') return 'addGenerationData';
-  if (typeof image.blockedFor === 'string' && image.blockedFor.toLowerCase() === 'moderated' && !image.needsReview) {
+  if (typeof image.blockedFor === 'string' && image.blockedFor.toLowerCase() === 'moderated') {
     return 'appeal';
   }
   return null;
 }
 
-/** What get_image tells a client about a blocked image. */
+/** What get_image tells a client about a blocked image with no review pending. */
 export const BLOCKED_TEXT = 'it is not visible to other users, and waiting will not change that.';
 
-/** What get_image adds for each remedy. */
-export const REMEDY_ADVICE: Readonly<Record<BlockedRemedy, string>> = {
+/** What get_image tells a client about a blocked image waiting for a moderator's review. */
+export const UNDER_REVIEW_TEXT = "it stays hidden from other users until Civitai's moderators review it.";
+
+/** What get_image adds for each remedy that is something the owner can do. */
+export const REMEDY_ADVICE: Readonly<Record<Exclude<BlockedRemedy, 'underReview'>, string>> = {
   addGenerationData:
     'Civitai could not verify it was AI-generated; add the generation details (prompt, tools and resources used) to its post to restore it.',
   appeal: 'If you think this is a mistake, its page on Civitai shows whether you can appeal.',

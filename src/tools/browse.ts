@@ -21,6 +21,7 @@ import {
   BLOCKED_TEXT,
   FAILED_ADVICE,
   REMEDY_ADVICE,
+  UNDER_REVIEW_TEXT,
   type BlockedRemedy,
   PROCESSING_ADVICE,
 } from '../lib/ingestion.js';
@@ -358,7 +359,11 @@ export const browseTools: ToolModule = (reg) => {
       if (blocked.length) {
         section(
           blocked
-            .map((b) => `Image ${b.id} is blocked: ${BLOCKED_TEXT}${b.remedy ? ` ${REMEDY_ADVICE[b.remedy]}` : ''}`)
+            .map((b) =>
+              b.remedy === 'underReview'
+                ? `Image ${b.id} is blocked: ${UNDER_REVIEW_TEXT}`
+                : `Image ${b.id} is blocked: ${BLOCKED_TEXT}${b.remedy ? ` ${REMEDY_ADVICE[b.remedy]}` : ''}`
+            )
             .join('\n')
         );
       }
