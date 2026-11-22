@@ -17,8 +17,11 @@ import {
   isBlockedImage,
   isFailedIngestion,
   isProcessingIngestion,
-  BLOCKED_ADVICE,
+  blockedRemedy,
+  BLOCKED_TEXT,
   FAILED_ADVICE,
+  REMEDY_ADVICE,
+  type BlockedRemedy,
   PROCESSING_ADVICE,
 } from '../lib/ingestion.js';
 
@@ -36,6 +39,8 @@ type FailedImage = ProcessingImage;
 interface BlockedImage {
   id: number;
   postId: number | null;
+  /** What the site offers the owner, or null when it offers nothing. */
+  remedy: BlockedRemedy | null;
 }
 
 /** What `image.get` says about an image REST did not return. */
@@ -77,6 +82,7 @@ async function imageGetFallback(
     postId?: unknown;
     nsfwLevel?: unknown;
     blockedFor?: unknown;
+    needsReview?: unknown;
   } | null;
   try {
     image = await trpc.call('image.get', { id }, 'GET');
@@ -86,7 +92,9 @@ async function imageGetFallback(
   if (image?.id !== id) return null;
   const postId = typeof image.postId === 'number' ? image.postId : null;
   // A block outranks the ingestion state: a blocked image being rescanned is still blocked.
-  if (isBlockedImage(image)) return { kind: 'blocked', image: { id, postId } };
+  if (isBlockedImage(image)) {
+    return { kind: 'blocked', image: { id, postId, remedy: blockedRemedy(image) } };
+  }
   if (isFailedIngestion(image.ingestion)) {
     return { kind: 'failed', image: { id, ingestion: image.ingestion as string, postId } };
   }
@@ -348,8 +356,11 @@ export const browseTools: ToolModule = (reg) => {
         section(`${lines.join('\n')}\n${PROCESSING_ADVICE}`);
       }
       if (blocked.length) {
-        const lines = blocked.map((b) => `Image ${b.id} is blocked by moderation.`);
-        section(`${lines.join('\n')}\n${BLOCKED_ADVICE}`);
+        section(
+          blocked
+            .map((b) => `Image ${b.id} is blocked: ${BLOCKED_TEXT}${b.remedy ? ` ${REMEDY_ADVICE[b.remedy]}` : ''}`)
+            .join('\n')
+        );
       }
       if (failed.length) {
         section(

@@ -200,7 +200,10 @@ describe('get_image reports processing for the caller’s own unscanned image', 
   });
 });
 
-const BLOCKED_TEXT = 'A blocked image is not visible to other users, and waiting will not change that.';
+const BLOCKED_TEXT = 'it is not visible to other users, and waiting will not change that.';
+const APPEAL_TEXT = 'If you think this is a mistake, its page on Civitai shows whether you can appeal.';
+const GENERATION_DATA_TEXT =
+  'Civitai could not verify it was AI-generated; add the generation details (prompt, tools and resources used) to its post to restore it.';
 const ERROR_TEXT =
   'Civitai could not finish scanning it and retries for a while; if it is still failed later, upload the image again.';
 const NOT_FOUND_TEXT = 'Civitai could not load the image file to scan it; upload the image again.';
@@ -209,7 +212,7 @@ describe('get_image reports blocked and failed images as their own state', () =>
   it('Blocked ingestion -> blocked, not "No image found"', async () => {
     const s = callerKey();
     const { imageGets } = stub(s, [], {
-      7401: { id: 7401, ingestion: 'Blocked', postId: 4501, nsfwLevel: 32, blockedFor: 'moderated' },
+      7401: { id: 7401, ingestion: 'Blocked', postId: 4501, nsfwLevel: 32, blockedFor: 'tos', needsReview: null },
     });
     const res = await run('get_image', s, { ids: [7401] });
 
@@ -217,30 +220,41 @@ describe('get_image reports blocked and failed images as their own state', () =>
     expect(imageGets).toEqual([7401]);
     expect(res.structuredContent).toEqual({
       processing: [],
-      blocked: [{ id: 7401, postId: 4501 }],
+      blocked: [{ id: 7401, postId: 4501, remedy: null }],
       failed: [],
       errors: [],
     });
-    expect(textOf(res)).toBe(`Image 7401 is blocked by moderation.\n${BLOCKED_TEXT}`);
+    expect(textOf(res)).toBe(`Image 7401 is blocked: ${BLOCKED_TEXT}`);
   });
 
   // The site's rule: any one of the three markers is a block, whatever the ingestion.
+  // The remedy is what the site's image page offers the owner for that reason.
   it.each([
-    ['the Blocked rating on a scanned image', { ingestion: 'Scanned', nsfwLevel: 32, blockedFor: null }],
-    ['a block reason on an image being rescanned', { ingestion: 'Rescan', nsfwLevel: 4, blockedFor: 'tos' }],
-    ['a block reason on a pending image', { ingestion: 'Pending', nsfwLevel: 0, blockedFor: 'AiNotVerified' }],
-    ['a block reason on a scan error', { ingestion: 'Error', nsfwLevel: 0, blockedFor: 'moderated' }],
-  ])('%s -> blocked', async (_label, fields) => {
+    ['the Blocked rating on a scanned image', { ingestion: 'Scanned', nsfwLevel: 32, blockedFor: null }, null],
+    ['a ToS reason on an image being rescanned', { ingestion: 'Rescan', nsfwLevel: 4, blockedFor: 'tos' }, null],
+    [
+      'an unverified-AI reason on a pending image',
+      { ingestion: 'Pending', nsfwLevel: 0, blockedFor: 'AiNotVerified' },
+      'addGenerationData',
+    ],
+    ['a moderator block on a scan error', { ingestion: 'Error', nsfwLevel: 0, blockedFor: 'moderated' }, 'appeal'],
+    [
+      'a moderator block already under appeal',
+      { ingestion: 'Blocked', nsfwLevel: 32, blockedFor: 'moderated', needsReview: 'appeal' },
+      null,
+    ],
+  ] as const)('%s -> blocked', async (_label, fields, remedy) => {
     const s = callerKey();
     stub(s, [], { 7402: { id: 7402, postId: null, ...fields } });
     const res = await run('get_image', s, { ids: [7402] });
     expect(res.structuredContent).toEqual({
       processing: [],
-      blocked: [{ id: 7402, postId: null }],
+      blocked: [{ id: 7402, postId: null, remedy }],
       failed: [],
       errors: [],
     });
-    expect(textOf(res)).toBe(`Image 7402 is blocked by moderation.\n${BLOCKED_TEXT}`);
+    const tail = remedy === 'appeal' ? ` ${APPEAL_TEXT}` : remedy === 'addGenerationData' ? ` ${GENERATION_DATA_TEXT}` : '';
+    expect(textOf(res)).toBe(`Image 7402 is blocked: ${BLOCKED_TEXT}${tail}`);
   });
 
   it('Error ingestion -> failed, with the retry advice', async () => {
@@ -294,7 +308,7 @@ describe('get_image reports blocked and failed images as their own state', () =>
     expect(imageGets).toEqual([7412, 7413, 7414]);
     expect(res.structuredContent).toEqual({
       processing: [{ id: 7412, ingestion: 'Pending', postId: 4511 }],
-      blocked: [{ id: 7413, postId: 4511 }],
+      blocked: [{ id: 7413, postId: 4511, remedy: null }],
       failed: [{ id: 7414, ingestion: 'Error', postId: 4511 }],
       errors: [],
     });
@@ -304,7 +318,7 @@ describe('get_image reports blocked and failed images as their own state', () =>
       text.endsWith(
         '\n\nImage 7412 is still processing (ingestion: Pending).\n' +
           'Images become visible once scanning finishes. Do not delete the post; call get_image again later.' +
-          `\n\nImage 7413 is blocked by moderation.\n${BLOCKED_TEXT}` +
+          `\n\nImage 7413 is blocked: ${BLOCKED_TEXT}` +
           `\n\nImage 7414 failed processing (ingestion: Error). ${ERROR_TEXT}`
       )
     ).toBe(true);
