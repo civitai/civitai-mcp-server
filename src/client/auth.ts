@@ -55,6 +55,14 @@ export class AuthContext {
     this.cachedSelfId = id;
   }
 
+  /**
+   * The self user id only when it was resolved from this request's key (never
+   * the CIVITAI_USER_ID config fallback). Used for log attribution.
+   */
+  getResolvedSelfId(): number | undefined {
+    return this.cachedSelfId;
+  }
+
   /** Read the cached/configured self user id, if any. */
   getCachedSelfId(): number | undefined {
     return this.cachedSelfId ?? this.configUserId;

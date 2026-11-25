@@ -182,7 +182,7 @@ in-cluster Civitai service, readiness/liveness probes on `/healthz`.
 | `FORWARD_USER_BROWSING_LEVEL` | `false` | When on, `search_models`, `search_images` and `get_image` use the calling user's own browsing level instead of the site default. Requires a Cloudflare-fronted deployment; see [Kubernetes](#kubernetes). |
 | `CIVITAI_USER_ID` | — | Optional: skip the `user.getToken` JWT round-trip for self-id resolution. |
 | `CIVITAI_UPLOAD_MAX_BYTES` | `10485760` | Max bytes accepted for an image fetched/decoded by `upload_image` (10 MB). Guards against memory exhaustion. |
-| `CIVITAI_UPLOAD_ALLOWED_HOSTS` | — | CSV allowlist of hostnames permitted for URL-based image uploads. When set, only these hosts (and subdomains) may be fetched. Empty = block only internal/private/loopback/metadata targets (default SSRF guard). |
+| `CIVITAI_UPLOAD_ALLOWED_HOSTS` | — | CSV allowlist of hostnames permitted for URL-based image uploads. When set, only these hosts (and subdomains) may be fetched and IP-literal URLs are refused. Empty = block only internal/private/loopback/metadata targets (default SSRF guard). |
 | `MCP_ALLOWED_HOSTS` | — | CSV of `Host` values allowed by DNS-rebinding protection. When set, protection is enabled and only these hosts may reach `/mcp`. Leave empty in-cluster (behind ingress); set for localhost dev, e.g. `localhost:3100,127.0.0.1:3100`. |
 
 #### Per-request auth (multi-tenant)
@@ -453,8 +453,16 @@ gets the `llms.txt` text. The advertised endpoint is derived from the request
 ## Security
 
 - **SSRF guard:** `upload_image` fetches user-supplied URLs through a guard that
-  blocks internal/private/loopback/metadata targets by default, with an optional
-  `CIVITAI_UPLOAD_ALLOWED_HOSTS` allowlist.
+  blocks internal/private/loopback/link-local/shared/reserved/metadata targets by
+  default, with an optional `CIVITAI_UPLOAD_ALLOWED_HOSTS` allowlist. Addresses
+  are parsed to bytes (IPv6 forms embedding an IPv4 address are unwrapped and
+  judged by the embedded address), DNS is resolved once and the connection is
+  pinned to the validated addresses, and every redirect hop is re-validated.
+- **Request logging:** one JSON line on stderr per tool call (tool, outcome,
+  error class, duration, the numeric user id once resolved from the caller's
+  own key) and per
+  outbound-fetch decision (allowed/refused, reason, hostname). Arguments, keys,
+  URLs and bodies are never logged.
 - **Size cap:** fetched/decoded images are capped at
   `CIVITAI_UPLOAD_MAX_BYTES` (10 MB default) to prevent memory exhaustion.
 - **DNS-rebinding protection:** enable `MCP_ALLOWED_HOSTS` to validate the
