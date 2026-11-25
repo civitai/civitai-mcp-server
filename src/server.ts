@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { Config } from './config.js';
 import { servicesFromHeaders, fail, type Services, type ToolResult } from './tools/helpers.js';
 import type { ToolAuth, ToolCatalogEntry } from './lib/landing.js';
+import { logEvent } from './lib/log.js';
 
 import { browseTools } from './tools/browse.js';
 import { articleTools } from './tools/articles.js';
@@ -108,10 +109,28 @@ export function createServer(config: Config): BuiltServer {
           | Record<string, string | string[] | undefined>
           | undefined;
         const services = servicesFromHeaders(config, headers);
+        const started = performance.now();
+        let outcome: 'ok' | 'error' = 'error';
+        let errorType: string | undefined;
         try {
-          return await handlerFn(args as Parameters<typeof handlerFn>[0], services);
+          const result = await handlerFn(args as Parameters<typeof handlerFn>[0], services);
+          outcome = result.isError ? 'error' : 'ok';
+          return result;
         } catch (err) {
+          errorType = err instanceof Error ? err.name : typeof err;
           return fail(err);
+        } finally {
+          // One line per tool call. Only the tool name, outcome, timing, the
+          // error class and the caller's numeric user id when already known —
+          // never arguments, keys, URLs or messages (they can carry secrets).
+          logEvent('tool_call', {
+            tool: name,
+            outcome,
+            errorType,
+            durationMs: Math.round(performance.now() - started),
+            authenticated: services.auth.keyIsCaller,
+            userId: services.auth.keyIsCaller ? services.auth.getCachedSelfId() : undefined,
+          });
         }
       }) as Parameters<typeof server.registerTool>[2]
     );
