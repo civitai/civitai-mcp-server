@@ -4,6 +4,7 @@ import https from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
 import { Readable } from 'node:stream';
 import { logEvent } from './log.js';
+import { SERVER_NAME, SERVER_VERSION } from '../version.js';
 
 /**
  * SSRF-hardened fetch for *user-supplied* URLs.
@@ -23,7 +24,9 @@ import { logEvent } from './log.js';
  *     connection to those validated addresses (a custom `lookup` on the
  *     request), so a second, different DNS answer can never be connected to
  *   - follows redirects manually (max 3), re-validating and re-pinning every hop
- *   - enforces a 10s timeout (until response headers) via AbortSignal
+ *   - enforces one 10s total deadline covering every hop and the body read
+ *   - sends a descriptive User-Agent, refuses URLs carrying credentials,
+ *     protocol upgrades and compressed responses
  *   - logs one structured line per hop decision (hostname + reason only)
  *
  * NOTE: the env-configured CIVITAI_API_URL is *trusted operator config* and must
@@ -261,6 +264,10 @@ async function validateUrl(
   allowedHosts?: string[]
 ): Promise<PinnedAddress[]> {
   const hostname = bareHost(url);
+  // Credentials in the URL would be sent as Basic auth; never forward them.
+  if (url.username !== '' || url.password !== '') {
+    refuse(hostname, hop, 'userinfo', 'URLs containing credentials (user:pass@) are not allowed');
+  }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     refuse(hostname, hop, 'scheme', `Blocked URL scheme "${url.protocol}" (only http/https allowed)`);
   }
@@ -343,58 +350,130 @@ export function pinnedLookup(addresses: PinnedAddress[]): LookupFunction {
 const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 
 /**
+ * Sent on every outbound request. Some hosts refuse requests without a
+ * User-Agent. Caller headers override these, except accept-encoding.
+ */
+export const DEFAULT_FETCH_HEADERS: Readonly<Record<string, string>> = {
+  'user-agent': `${SERVER_NAME}/${SERVER_VERSION} (+https://mcp.civitai.com)`,
+  accept: 'image/*,*/*;q=0.8',
+};
+
+export class FetchTimeoutError extends Error {
+  constructor(message = 'Upstream fetch timed out') {
+    super(message);
+    this.name = 'FetchTimeoutError';
+  }
+}
+
+/** Keep only characters a Response reason phrase may hold (printable ASCII + tab). */
+function safeStatusText(raw: string | undefined): string {
+  return (raw ?? '').replace(/[^\t\x20-\x7e]/g, '');
+}
+
+/**
  * One GET whose TCP connection can only go to `addresses` (no DNS at connect
  * time). Exported for tests. Uses a fresh agent so no pooled socket is reused.
+ *
+ * Always settles exactly once: on a response, a socket error, a protocol
+ * upgrade (refused), an unusable response (refused), or `signal` aborting.
+ * An abort after the response has resolved destroys the connection, so a
+ * pending body read errors instead of hanging. `onClose` fires when the
+ * response stream closes (body fully read, cancelled or destroyed).
+ *
+ * Only identity encoding is requested; a response that is compressed anyway is
+ * refused rather than decompressed, so the caller's size cap always applies to
+ * the bytes actually used.
  */
 export function requestPinned(
   url: URL,
   addresses: PinnedAddress[],
   headers: Record<string, string> = {},
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onClose?: () => void
 ): Promise<Response> {
   const client = url.protocol === 'https:' ? https : http;
+  const sent: Record<string, string> = { ...DEFAULT_FETCH_HEADERS };
+  for (const [k, v] of Object.entries(headers)) sent[k.toLowerCase()] = v;
+  sent['accept-encoding'] = 'identity';
+
   return new Promise<Response>((resolve, reject) => {
+    let settled = false;
+    let response: http.IncomingMessage | undefined;
+    const fail = (err: Error): void => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+      response?.destroy(err);
+      req.destroy(err);
+    };
+    const onAbort = (): void => fail(new FetchTimeoutError());
+
     const req = client.request(
       url,
-      {
-        method: 'GET',
-        headers: { 'accept-encoding': 'identity', ...headers },
-        agent: false,
-        lookup: pinnedLookup(addresses),
-        signal,
-      },
+      { method: 'GET', headers: sent, agent: false, lookup: pinnedLookup(addresses) },
       (res) => {
-        const status = res.statusCode ?? 0;
-        if (status < 200 || status > 599) {
-          res.destroy();
-          reject(new Error(`Unexpected upstream status ${status}`));
-          return;
+        response = res;
+        res.once('close', () => {
+          signal?.removeEventListener('abort', onAbort);
+          onClose?.();
+        });
+        // Any throw here would escape the promise (this is an event callback),
+        // so every failure is routed through fail().
+        try {
+          const status = res.statusCode ?? 0;
+          if (status < 200 || status > 599) {
+            throw new Error(`Unexpected upstream status ${status}`);
+          }
+          const encoding = String(res.headers['content-encoding'] ?? 'identity').trim().toLowerCase();
+          if (encoding !== '' && encoding !== 'identity') {
+            throw new Error('Upstream sent a compressed response although identity encoding was requested');
+          }
+          const out = new Headers();
+          for (const [k, v] of Object.entries(res.headers)) {
+            if (v === undefined) continue;
+            for (const one of Array.isArray(v) ? v : [v]) out.append(k, one);
+          }
+          let body: ReadableStream<Uint8Array> | null = null;
+          if (NULL_BODY_STATUSES.has(status)) res.resume();
+          else body = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>;
+          const built = new Response(body, { status, statusText: safeStatusText(res.statusMessage), headers: out });
+          if (!settled) {
+            settled = true;
+            resolve(built);
+          }
+        } catch (err) {
+          fail(err instanceof Error ? err : new Error(String(err)));
         }
-        const out = new Headers();
-        for (const [k, v] of Object.entries(res.headers)) {
-          if (v === undefined) continue;
-          for (const one of Array.isArray(v) ? v : [v]) out.append(k, one);
-        }
-        let body: ReadableStream<Uint8Array> | null = null;
-        if (NULL_BODY_STATUSES.has(status)) res.resume();
-        else body = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>;
-        resolve(new Response(body, { status, statusText: res.statusMessage ?? '', headers: out }));
       }
     );
-    req.on('error', reject);
+    // A protocol switch is never a valid answer to a plain GET.
+    req.on('upgrade', (_res, socket) => {
+      socket.destroy();
+      fail(new Error('Upstream attempted a protocol upgrade'));
+    });
+    req.on('error', (err) => fail(err));
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
     req.end();
   });
 }
 
 export interface SafeFetchInit {
   headers?: Record<string, string>;
+  /** Total deadline for all hops AND reading the body (default 10s). */
+  timeoutMs?: number;
 }
 
 /**
  * GET a *user-supplied* URL with SSRF protections. Validates the host, pins the
  * connection to the validated addresses, and follows up to 3 redirects
- * manually, re-validating every hop. Enforces the FETCH_TIMEOUT_MS deadline
- * until response headers. Caller owns size limits and body consumption.
+ * manually, re-validating every hop. One total deadline (FETCH_TIMEOUT_MS by
+ * default) covers every hop and the final body read: when it fires, the
+ * connection is destroyed and a pending read rejects. Caller owns size limits
+ * and body consumption.
  */
 export async function safeFetchUrl(
   rawUrl: string,
@@ -409,7 +488,9 @@ export async function safeFetchUrl(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), init.timeoutMs ?? FETCH_TIMEOUT_MS);
+  timeout.unref?.();
+  let returned = false;
 
   try {
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -421,7 +502,11 @@ export async function safeFetchUrl(
         hop,
       });
 
-      const res = await requestPinned(current, addresses, init.headers, controller.signal);
+      let closed = false;
+      const res = await requestPinned(current, addresses, init.headers, controller.signal, () => {
+        closed = true;
+        if (returned) clearTimeout(timeout);
+      });
 
       // Manual redirect handling: re-validate the target before following.
       if (res.status >= 300 && res.status < 400 && res.headers.has('location')) {
@@ -439,11 +524,15 @@ export async function safeFetchUrl(
         continue;
       }
 
+      // The deadline now guards the body read; it is cleared when the
+      // response stream closes.
+      returned = true;
+      if (closed) clearTimeout(timeout);
       return res;
     }
     // Unreachable: loop either returns a response or throws.
     throw new SsrfError('Redirect handling failed');
   } finally {
-    clearTimeout(timeout);
+    if (!returned) clearTimeout(timeout);
   }
 }

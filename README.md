@@ -459,7 +459,8 @@ gets the `llms.txt` text. The advertised endpoint is derived from the request
   judged by the embedded address), DNS is resolved once and the connection is
   pinned to the validated addresses, and every redirect hop is re-validated.
 - **Request logging:** one JSON line on stderr per tool call (tool, outcome,
-  error class, duration, the caller's numeric user id when known) and per
+  error class, duration, the numeric user id once resolved from the caller's
+  own key) and per
   outbound-fetch decision (allowed/refused, reason, hostname). Arguments, keys,
   URLs and bodies are never logged.
 - **Size cap:** fetched/decoded images are capped at

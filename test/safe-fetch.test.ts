@@ -4,12 +4,14 @@ import { Readable } from 'node:stream';
 import dns from 'node:dns';
 import http from 'node:http';
 import https from 'node:https';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import {
   isPrivateAddress,
   isBlockedHostname,
   isOutsideAllowlist,
   safeFetchUrl,
+  requestPinned,
+  FetchTimeoutError,
   SsrfError,
 } from '../src/lib/safe-fetch.js';
 
@@ -164,11 +166,14 @@ interface Scripted {
   status: number;
   headers?: Record<string, string>;
   body?: string;
+  /** Body never ends (for deadline tests). */
+  stall?: boolean;
 }
 
 interface Attempt {
   url: string;
   lookup?: (...args: unknown[]) => void;
+  headers?: Record<string, string>;
 }
 
 function scriptNetwork(script: Scripted[]): { attempts: Attempt[] } {
@@ -176,13 +181,20 @@ function scriptNetwork(script: Scripted[]): { attempts: Attempt[] } {
   let i = 0;
   const next = (): Scripted => script[Math.min(i++, script.length - 1)]!;
 
-  const fakeRequest = ((url: URL, opts: { lookup?: Attempt['lookup'] }, cb: (res: unknown) => void) => {
-    attempts.push({ url: String(url), lookup: opts?.lookup });
+  const fakeRequest = ((
+    url: URL,
+    opts: { lookup?: Attempt['lookup']; headers?: Record<string, string> },
+    cb: (res: unknown) => void
+  ) => {
+    attempts.push({ url: String(url), lookup: opts?.lookup, headers: opts?.headers });
     const s = next();
-    const req = new EventEmitter() as EventEmitter & { end: () => unknown };
+    const req = new EventEmitter() as EventEmitter & { end: () => unknown; destroy: () => unknown };
+    req.destroy = () => req;
     req.end = () => {
       setImmediate(() => {
-        const res = Readable.from([Buffer.from(s.body ?? '')]) as Readable & Record<string, unknown>;
+        const res = (
+          s.stall ? new Readable({ read() {} }) : Readable.from([Buffer.from(s.body ?? '')])
+        ) as Readable & Record<string, unknown>;
         res.statusCode = s.status;
         res.statusMessage = '';
         res.headers = Object.fromEntries(
@@ -267,6 +279,33 @@ describe('safeFetchUrl', () => {
 
   it('rejects malformed URLs', async () => {
     await expect(safeFetchUrl('not a url')).rejects.toBeInstanceOf(SsrfError);
+  });
+
+  it('refuses URLs carrying credentials without connecting', async () => {
+    const { attempts } = scriptNetwork([{ status: 200 }]);
+    await expect(safeFetchUrl('http://user:pass@93.184.216.34/')).rejects.toThrow(/credentials/);
+    await expect(safeFetchUrl('http://user@93.184.216.34/')).rejects.toThrow(/credentials/);
+    expect(attempts).toEqual([]);
+  });
+
+  it('sends the default User-Agent and Accept headers', async () => {
+    const { attempts } = scriptNetwork([{ status: 200, body: 'x' }]);
+    await safeFetchUrl('http://93.184.216.34/a.png');
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]!.headers).toEqual({
+      'user-agent': 'civitai-mcp-server/0.2.0 (+https://mcp.civitai.com)',
+      accept: 'image/*,*/*;q=0.8',
+      'accept-encoding': 'identity',
+    });
+  });
+
+  it('total deadline also covers the body read', async () => {
+    scriptNetwork([{ status: 200, stall: true }]);
+    const started = Date.now();
+    const res = await safeFetchUrl('http://93.184.216.34/slow', { timeoutMs: 150 });
+    expect(res.status).toBe(200);
+    await expect(res.text()).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 
   // Every IP-literal spelling of a non-public address, as the URL parser
@@ -426,6 +465,106 @@ describe('requestPinned (real socket)', () => {
       expect(await res.text()).toBe('pinned-ok');
       expect(res.headers.get('x-host-seen')).toBe(`pinned.invalid:${port}`);
       expect(lookupSpy).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});
+
+// Raw TCP servers: the response bytes are exactly what a hostile upstream can
+// send, unfiltered by node's http server.
+async function rawServer(payload: string | null): Promise<{ url: URL; close: () => Promise<void> }> {
+  const sockets = new Set<net.Socket>();
+  const srv = net.createServer((sock) => {
+    sockets.add(sock);
+    sock.on('error', () => undefined);
+    sock.once('data', () => {
+      if (payload !== null) sock.write(payload);
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+  const { port } = srv.address() as AddressInfo;
+  return {
+    url: new URL(`http://raw.invalid:${port}/x`),
+    close: () =>
+      new Promise<void>((r) => {
+        for (const s of sockets) s.destroy();
+        srv.close(() => r());
+      }),
+  };
+}
+
+const LOCAL = [{ address: '127.0.0.1', family: 4 as const }];
+
+describe('requestPinned (hostile upstream)', () => {
+  it('a control character in the reason phrase settles cleanly', { timeout: 3000 }, async () => {
+    const srv = await rawServer('HTTP/1.1 200 O\x01K\r\nContent-Length: 2\r\n\r\nok');
+    try {
+      const res = await requestPinned(srv.url, LOCAL);
+      expect(res.status).toBe(200);
+      expect(res.statusText).toBe('OK');
+      expect(await res.text()).toBe('ok');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('a compressed response is refused (rejects, does not throw out of the callback)', { timeout: 3000 }, async () => {
+    const srv = await rawServer('HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 2\r\n\r\nzz');
+    try {
+      await expect(requestPinned(srv.url, LOCAL)).rejects.toThrow(/compressed/);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('a 101 upgrade response rejects promptly', { timeout: 3000 }, async () => {
+    const srv = await rawServer(
+      'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'
+    );
+    try {
+      await expect(requestPinned(srv.url, LOCAL)).rejects.toThrow(/protocol upgrade/);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('a silent upstream is rejected by the signal before headers', { timeout: 3000 }, async () => {
+    const srv = await rawServer(null);
+    try {
+      await expect(requestPinned(srv.url, LOCAL, {}, AbortSignal.timeout(150))).rejects.toBeInstanceOf(
+        FetchTimeoutError
+      );
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('an abort after headers errors the pending body read', { timeout: 3000 }, async () => {
+    const srv = await rawServer('HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial');
+    try {
+      const res = await requestPinned(srv.url, LOCAL, {}, AbortSignal.timeout(150));
+      expect(res.status).toBe(200);
+      await expect(res.text()).rejects.toThrow();
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('sends the default headers on the wire', { timeout: 3000 }, async () => {
+    let seen: http.IncomingHttpHeaders = {};
+    const server = http.createServer((req, res) => {
+      seen = req.headers;
+      res.end('ok');
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const res = await requestPinned(new URL(`http://hdr.invalid:${port}/`), LOCAL);
+      await res.text();
+      expect(seen['user-agent']).toBe('civitai-mcp-server/0.2.0 (+https://mcp.civitai.com)');
+      expect(seen.accept).toBe('image/*,*/*;q=0.8');
+      expect(seen['accept-encoding']).toBe('identity');
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
     }

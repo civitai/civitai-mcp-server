@@ -129,7 +129,7 @@ export function createServer(config: Config): BuiltServer {
             errorType,
             durationMs: Math.round(performance.now() - started),
             authenticated: services.auth.keyIsCaller,
-            userId: services.auth.keyIsCaller ? services.auth.getCachedSelfId() : undefined,
+            userId: services.auth.keyIsCaller ? services.auth.getResolvedSelfId() : undefined,
           });
         }
       }) as Parameters<typeof server.registerTool>[2]
